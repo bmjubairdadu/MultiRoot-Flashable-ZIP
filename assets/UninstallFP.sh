@@ -155,12 +155,20 @@ find_part() {
 
 TARGET=""
 TARGET_KIND="boot"
-for _n in boot kern-a android_boot kernel bootimg lnx; do
+for _n in init_boot vendor_boot boot kern-a android_boot kernel bootimg lnx; do
   T=$(find_part "$_n")
-  if [ -n "$T" ]; then TARGET="$T"; break; fi
+  if [ -n "$T" ]; then
+    TARGET="$T"
+    case "$_n" in
+      init_boot*) TARGET_KIND="init_boot" ;;
+      vendor_boot*) TARGET_KIND="vendor_boot" ;;
+      *) TARGET_KIND="boot" ;;
+    esac
+    break
+  fi
 done
 if [ -z "$TARGET" ]; then abort "no boot partition found"; fi
-ui_print "- Target: boot ($TARGET)"
+ui_print "- Target: $TARGET_KIND ($TARGET)"
 
 # Find stock backup (prefer slot-matched backup)
 BACKUP=""

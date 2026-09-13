@@ -56,11 +56,12 @@ def build(outname, script_name, script_data, ub, us, rd, bb, kt, kp, apk, extra=
     w(z, "busybox", bb, 0o755)
     w(z, "lib/arm64-v8a/libbusybox.so", bb, 0o755)
     w(z, "lib/arm64-v8a/libkptools.so", kt, 0o755)
-    w(z, "assets/kpimg", kp, 0o755)
     for name, data in (extra or []):
         w(z, name, data, 0o755)
     w(z, "assets/" + script_name, script_data, 0o755)
     # Also include assets folder contents (apd, fpd, resetprop, etc.)
+    # Skip the script file itself since it's already added above.
+    # Note: kpimg is included via assets/ folder walk below (from assets/kpimg file).
     # Skip the script file itself since it's already added above.
     assets_dir = os.path.join(ROOT, "assets")
     if os.path.isdir(assets_dir):

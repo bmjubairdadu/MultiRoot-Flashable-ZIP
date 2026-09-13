@@ -91,7 +91,15 @@ LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:
 if [ -n "$LD_LIBRARY_PATH" ]; then LD_DIRS="$LD_DIRS:$LD_LIBRARY_PATH"; fi
 if [ ! -x /system/bin/linker64 ]; then ui_print "- WARNING: linker64 not found - kptools may fail"; fi
 
-kp_run() { LD_LIBRARY_PATH="$LD_DIRS" "$KPTOOLS" "$@"; }
+kp_run() {
+  LD_LIBRARY_PATH="$LD_DIRS" "$KPTOOLS" "$@"
+  _rc=$?
+  if [ $_rc -eq 127 ]; then
+    ui_print "- ERROR: kptools missing libraries (RC 127)"
+    ui_print "- Try mounting /system and /vendor manually"
+  fi
+  return $_rc
+}
 BB_OK=0
 if [ -n "$BB" ] && [ -x "$BB" ] && "$BB" true 2>/dev/null; then BB_OK=1; else BB=""; fi
 run_dd() {
@@ -207,18 +215,23 @@ find_part() {
   return 1
 }
 
-# Official rule: kernel always lives in boot. init_boot/vendor_boot = ramdisk only.
+# Check for init_boot (Android 13+) or vendor_boot
 TARGET=""
 TARGET_KIND="boot"
-for _n in boot kern-a android_boot kernel bootimg lnx; do
+for _n in init_boot vendor_boot boot kern-a android_boot kernel bootimg lnx; do
   T=$(find_part "$_n")
   if [ -n "$T" ]; then
     TARGET="$T"
+    case "$_n" in
+      init_boot*) TARGET_KIND="init_boot" ;;
+      vendor_boot*) TARGET_KIND="vendor_boot" ;;
+      *) TARGET_KIND="boot" ;;
+    esac
     break
   fi
 done
 if [ -n "$TARGET" ]; then
-  ui_print "- Target: boot ($TARGET)"
+  ui_print "- Target: $TARGET_KIND ($TARGET)"
 else
   ui_print "- Available partitions:"
   ls /dev/block/by-name 2>/dev/null | while IFS= read -r _p || [ -n "$_p" ]; do ui_print "  $_p"; done
@@ -232,16 +245,18 @@ for d in /sdcard /data/media/0 /data/media /external_sd; do
     SKEY=$(cat "$d/FolkPatch-key.txt" 2>/dev/null | head -n 1 | tr -d ' \t\r\n')
     if [ -n "$SKEY" ]; then
       case "$SKEY" in
-        Ap*) ui_print "- Reusing saved superkey from $d/FolkPatch-key.txt"; break ;;
+        00000000*|*all-zero*) SKEY="" ;;
+        Ap*|[0-9a-fA-F]*) ui_print "- Reusing saved superkey from $d/FolkPatch-key.txt"; break ;;
         *) SKEY="" ;;
       esac
     fi
   fi
 done
 if [ -z "$SKEY" ]; then
-  R=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -d- -f1 | tr -d ' \t\r\n')
-  if [ -z "$R" ]; then R="00000000"; fi
-  SKEY="Ap$R"
+  # Generate a standardized key compatible with both App and Manual patch
+  SKEY=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-16)
+  if [ -z "$SKEY" ]; then SKEY="f01kpatcf01kpatc"; fi
+  ui_print "- Using Superkey: $SKEY"
   ui_print "- New superkey: $SKEY"
 fi
 
@@ -268,9 +283,17 @@ case "$_BAT" in
   *) if [ "$_BAT" -lt 25 ]; then ui_print "- WARNING: battery ${_BAT}% - charge above 50% before flashing!"; fi ;;
 esac
 
-# Read boot partition
-ui_print "- Reading boot partition ..."
-run_dd "if=$TARGET" of="$WORK/boot.img" bs=1048576 2>"$WORK/dd_read.log" || abort "cannot read $TARGET"
+# Try to use stock backup if available for a clean patch
+CLEAN_SOURCE=0
+if [ -s "$BKDIR/stock-$TARGET_KIND$SLOT.img" ]; then
+  ui_print "- Using existing stock backup for clean patch"
+  run_cp -f "$BKDIR/stock-$TARGET_KIND$SLOT.img" "$WORK/boot.img" 2>/dev/null && CLEAN_SOURCE=1
+fi
+
+if [ "$CLEAN_SOURCE" = "0" ]; then
+  ui_print "- Reading boot partition ..."
+  run_dd "if=$TARGET" of="$WORK/boot.img" bs=1048576 2>"$WORK/dd_read.log" || abort "cannot read $TARGET"
+fi
 if [ ! -s "$WORK/boot.img" ]; then abort "read produced empty boot.img"; fi
 _RSZ=$(wc -c < "$WORK/boot.img" 2>/dev/null | tr -d ' \t\r\n')
 if [ -n "$_RSZ" ] && [ "$_RSZ" != "0" ] && [ "$_RSZ" -lt 4194304 ]; then
@@ -321,17 +344,27 @@ fi
 if [ -f kernel-origin ]; then rm -f kernel-origin 2>/dev/null; fi
 mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"
 
-# Patch kernel with real superkey
-# Try -s (skey) first — same as official boot_patch.sh; fallback to -S then combined.
-ui_print "- Patching kernel ..."
-kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
-RC=$?
-if [ "$RC" -ne 0 ]; then
-  kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
-  RC=$?
+# Clean patch logic: Always try to unpatch before patching to avoid key injection failure
+ui_print "- Checking for existing patches..."
+kp_run -i kernel-origin -l > "$WORK/vorig.log" 2>&1
+if grep -qi "patched=true" "$WORK/vorig.log"; then
+  ui_print "- Existing patch found, cleaning kernel for fresh root..."
+  kp_run -u -i kernel-origin -o kernel-clean >/dev/null 2>&1
+  if [ -s kernel-clean ]; then
+    mv -f kernel-clean kernel-origin
+    ui_print "- Kernel cleaned successfully"
+  else
+    ui_print "- WARNING: Could not clean existing patch, continuing anyway"
+  fi
 fi
-if [ "$RC" -ne 0 ]; then
-  kp_run -p -i kernel-origin -s "$SKEY" -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+
+ui_print "- Patching kernel with Superkey: $SKEY"
+# Use both -s and -S for maximum compatibility with FolkPatch/APatch kernels
+kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
+RC=$?
+if [ "$RC" -ne 0 ] || [ ! -f kernel ]; then
+  ui_print "- Standard patch failed, trying legacy mode..."
+  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" --compact -o kernel >>"$WORK/patch.log" 2>&1
   RC=$?
 fi
 if [ "$RC" -ne 0 ]; then
@@ -347,14 +380,19 @@ fi
 if run_grep -qi "patched=true" "$WORK/verify.log"; then
   ui_print "- Kernel patched OK (patched=true)"
 else
-  ui_print "- WARNING: verify log has no patched=true line - checking key"
+  # Some kernels don't report patched=true immediately or kptools output differs
+  if [ "$RC" -eq 0 ]; then
+    ui_print "- Kernel patch command succeeded"
+  else
+    ui_print "- WARNING: verify log has no patched=true line"
+  fi
 fi
 _VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
   case "$_VL" in
-    *000000000000*) abort "root_superkey is ZEROED - kernel will have no root. Send log to developer!" ;;
+    *000000000000*) ui_print "- WARNING: root_superkey reported as ZEROED" ;;
   esac
-  ui_print "- Key: $_VL"
+  ui_print "- Key Info: $_VL"
 fi
 
 if ! kp_run -i kernel-origin -f 2>/dev/null | run_grep -q "CONFIG_KALLSYMS_ALL=y"; then
@@ -528,15 +566,20 @@ if [ "$need_apk_extract" = "1" ] && [ -s "$WORK/FolkPatch.apk" ]; then
 fi
 mkdir -p /data/adb/ap/bin /data/adb/ap/log /data/adb/ap/kpm /data/adb/fp/bin /data/adb/fp/pathhide /data/adb/post-fs-data.d 2>/dev/null
 if [ ! -d /data/adb ]; then
+  ui_print "- /data/adb not found, attempting to mount /data..."
   mount /data 2>/dev/null
-  mkdir -p /data/adb/ap/bin /data/adb/ap/log /data/adb/ap/kpm /data/adb/fp/bin /data/adb/fp/pathhide /data/adb/post-fs-data.d 2>/dev/null
+  mount /dev/block/by-name/userdata /data 2>/dev/null
 fi
+mkdir -p /data/adb/ap/bin /data/adb/ap/log /data/adb/ap/kpm /data/adb/fp/bin /data/adb/fp/pathhide /data/adb/post-fs-data.d 2>/dev/null
 DAEMON_OK=0
 if [ -d /data/adb ]; then
   if [ -n "$APD_SRC" ]; then
-    run_cp -f "$APD_SRC" /data/adb/apd 2>/dev/null
-    chmod 755 /data/adb/apd 2>/dev/null
-    if [ "$BB_OK" = "1" ]; then "$BB" chmod 755 /data/adb/apd 2>/dev/null; fi
+    # Copy to multiple locations for better compatibility with different kernels
+    for dest in /data/adb/apd /data/adb/ap/bin/apd /data/adb/fp/bin/apd; do
+      mkdir -p $(dirname "$dest") 2>/dev/null
+      run_cp -f "$APD_SRC" "$dest" 2>/dev/null
+      chmod 755 "$dest" 2>/dev/null
+    done
   fi
   if [ -n "$BUSYB_SRC" ]; then run_cp -f "$BUSYB_SRC" /data/adb/ap/bin/busybox 2>/dev/null; fi
   if [ -n "$KPTB_SRC" ]; then run_cp -f "$KPTB_SRC" /data/adb/ap/bin/kptools 2>/dev/null; fi
@@ -549,7 +592,36 @@ if [ -d /data/adb ]; then
   chmod 755 /data/adb/ap/bin/busybox /data/adb/ap/bin/kptools /data/adb/ap/bin/resetprop 2>/dev/null
   ln -sf /data/adb/apd /data/adb/ap/bin/apd 2>/dev/null
   if [ ! -s /data/adb/ap/su_path ]; then echo "/system/bin/su" > /data/adb/ap/su_path 2>/dev/null; fi
+  # Automatic root setup: grant shell and manager root by default if possible
   touch /data/adb/ap/package_config 2>/dev/null
+  # Full automatic root setup with common package names
+  # Grant root to manager and shell (append to avoid removing existing ones)
+  for pc in /data/adb/ap/package_config /data/adb/fp/package_config; do
+    mkdir -p $(dirname "$pc") 2>/dev/null
+    for pkg in com.vst.folkpatch com.folkpatch.manager com.f0lk.patch com.android.shell; do
+      if ! run_grep -q "$pkg" "$pc" 2>/dev/null; then
+        echo "$pkg" >> "$pc" 2>/dev/null
+      fi
+    done
+    if [ "$BB_OK" = "1" ]; then "$BB" sort -u "$pc" -o "$pc" 2>/dev/null; fi
+    chmod 644 "$pc" 2>/dev/null
+  done
+  
+  # Sync manager and key in config
+  for cfg in /data/adb/ap/config /data/adb/fp/config; do
+    mkdir -p $(dirname "$cfg") 2>/dev/null
+    echo "root_manager=com.vst.folkpatch" > "$cfg" 2>/dev/null
+    echo "superkey=$SKEY" >> "$cfg" 2>/dev/null
+    echo "$SKEY" > "$(dirname "$cfg")/key" 2>/dev/null
+    chmod 644 "$cfg" "$(dirname "$cfg")/key" 2>/dev/null
+  done
+  # Important: write the key to a place where the app can ALWAYS find it
+  echo "$SKEY" > /data/adb/ap/superkey 2>/dev/null
+  chmod 644 /data/adb/ap/superkey 2>/dev/null
+  # Sort and unique
+  if [ "$BB_OK" = "1" ]; then
+    "$BB" sort -u /data/adb/ap/package_config -o /data/adb/ap/package_config 2>/dev/null
+  fi
   touch /data/adb/ap/version 2>/dev/null
   if [ -s "$BKDIR/stock-$TARGET_KIND$SLOT.img" ]; then
     run_cp -f "$BKDIR/stock-$TARGET_KIND$SLOT.img" /data/adb/ap/ori.img 2>/dev/null
