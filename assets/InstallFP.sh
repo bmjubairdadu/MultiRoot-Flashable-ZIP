@@ -137,7 +137,7 @@ if [ ! -f "$KPIMG" ]; then abort "kpimg missing"; fi
 
 ui_print "****************************"
 ui_print " FolkPatch Recovery Installer"
-ui_print " v10.2 / KP-0.13.8"
+ui_print " v10.3 / KP-0.13.8"
 ui_print " Universal boot-only patcher"
 ui_print "****************************"
 
@@ -237,14 +237,16 @@ else
   abort "No boot partition found. Use Boot-Patcher ZIP + fastboot instead."
 fi
 
-# KEYLESS patch (official FolkTool / app flow): NO -s / -S flags.
-# FolkTool's kptools_service.dart patches with only
-#   kptools -p -i kernel -k kpimg -o kernel
-# and the Manager (v4.3+, incl. v5.0 on this device) authenticates by APK
-# signature, default superkey "su". A hash-locked -S key BREAKS that
-# handshake (kernel expects the key, app sends "su"), so the app shows
-# "not installed" even though apd runs. Hence: no key generation, no reuse.
-ui_print "- Auth mode: keyless (signature verification, no superkey)"
+# Superkey = fixed default "su" (same as the DOCUMENTED manual method:
+#   kptools -p --image kernel --skey "su" --kpimg kpimg-android --out kernel
+# and the app itself: APApplication.superKey = "su", doPatch default "su").
+# Why NOT keyless: with no -s/-S, kptools stores nothing; at boot the kernel
+# generates a RANDOM superkey (predata.c) that the app can never guess, so
+# every supercall returns -EPERM and the app shows "not installed".
+# Why NOT custom (-S ApXXX): the app sends "su", hash mismatches the baked
+# key -> same -EPERM. Plaintext "su" matches on first compare. No key file:
+# the key is a constant, nothing to save or reuse.
+ui_print "- Auth mode: default superkey 'su' (no key entry needed)"
 
 # Backup directory
 BKDIR=""
@@ -315,8 +317,8 @@ mkdir -p /data/FolkPatch-Backup 2>/dev/null
 if [ ! -s "/data/FolkPatch-Backup/stock-$TARGET_KIND$SLOT.img" ]; then
   run_cp -f "$WORK/boot.img" "/data/FolkPatch-Backup/stock-$TARGET_KIND$SLOT.img" 2>/dev/null
 fi
-# Remove stale key files from old keyed ZIPs (keyless needs none; a leftover
-# key only confuses: kernel has no key but file claims one).
+# Remove stale key files from old keyed ZIPs (the key is a fixed constant
+# now; a leftover file only confuses).
 for d in /sdcard /data/media/0 /data/media /external_sd "$BKDIR" /data/FolkPatch-Backup; do
   rm -f "$d/FolkPatch-key.txt" 2>/dev/null
 done
@@ -343,10 +345,11 @@ if grep -qi "patched=true" "$WORK/vorig.log"; then
   fi
 fi
 
-ui_print "- Patching kernel (keyless, signature auth) ..."
-# Keyless = same as FolkTool: no -s / -S. The app authenticates by APK
-# signature with default superkey "su"; any baked-in key breaks the handshake.
-kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+ui_print "- Patching kernel with default superkey ..."
+# Documented manual method: -s "su". Plaintext compare succeeds with the
+# app's key, so sc_ready("su") is true on first boot. (Keyless would leave
+# the kernel with a random key; -S would hash-lock a key the app never sends.)
+kp_run -p -i kernel-origin -k "$KPIMG" -s "su" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
 if [ "$RC" -ne 0 ]; then
   print_file "$WORK/patch.log"
@@ -368,11 +371,18 @@ else
     ui_print "- WARNING: verify log has no patched=true line"
   fi
 fi
-# Keyless verify: root_superkey zeroed/empty is EXPECTED (signature auth).
-# Only patched=true matters.
-_VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
+# Verify: superkey must read back as "su" (plaintext stored by -s).
+# root_superkey zeroed is fine (no -S used); only patched=true matters
+# besides the plaintext key.
+_VL=$(run_grep -i "^superkey=" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
-  ui_print "- Key Info: $_VL (keyless OK)"
+  case "$_VL" in
+    superkey=su*) ui_print "- Superkey OK: su" ;;
+    *) abort "superkey mismatch ($_VL) - app sends 'su', root will NOT work!" ;;
+  esac
+else
+  ui_print "- WARNING: no superkey line in verify log"
+  print_file "$WORK/verify.log"
 fi
 
 if ! kp_run -i kernel-origin -f 2>/dev/null | run_grep -q "CONFIG_KALLSYMS_ALL=y"; then
@@ -430,8 +440,8 @@ if [ -n "$OTHER" ]; then
       run_cp -f "$WORK/obot.img" "$WORK/boot.img" 2>/dev/null
       if kp_run unpack boot.img >"$WORK/ounpack.log" 2>&1 && [ -f kernel ]; then
         mv kernel kernel-origin 2>/dev/null
-        # Keyless, same as current slot.
-        if kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
+        # Same fixed key as current slot.
+        if kp_run -p -i kernel-origin -k "$KPIMG" -s "su" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
         if [ "$_orc" -eq 0 ] && kp_run repack boot.img >"$WORK/orepack.log" 2>&1 && [ -f "$WORK/new-boot.img" ]; then
           run_cp -f "$WORK/new-boot.img" "$WORK/new-boot-inactive.img" 2>/dev/null
           _osz=$(wc -c < "$WORK/new-boot.img" 2>/dev/null | tr -d ' \t\r\n')
@@ -564,6 +574,7 @@ if [ -d /data/adb ]; then
   fi
   chmod 755 /data/adb/ap/bin/busybox /data/adb/ap/bin/kptools /data/adb/ap/bin/resetprop 2>/dev/null
   ln -sf /data/adb/apd /data/adb/ap/bin/apd 2>/dev/null
+  # su_path: app writes LEGACY path (/system/bin/su) when empty; do the same.
   if [ ! -s /data/adb/ap/su_path ]; then echo "/system/bin/su" > /data/adb/ap/su_path 2>/dev/null; fi
   # Pre-authorize the real Manager package (verified: me.yuki.folk v5.0 on
   # device + in APK dex) and shell so root works right after reboot.
@@ -580,6 +591,14 @@ if [ -d /data/adb ]; then
   touch /data/adb/ap/version 2>/dev/null
   if [ -s "$BKDIR/stock-$TARGET_KIND$SLOT.img" ]; then
     run_cp -f "$BKDIR/stock-$TARGET_KIND$SLOT.img" /data/adb/ap/ori.img 2>/dev/null
+  fi
+  # magiskpolicy --live --magisk: the app runs this after installing (it only
+  # exists bundled as a stub-less call; recovery has no libmagiskpolicy.so in
+  # this APK, so apply via the installed apd if present, else warn).
+  if [ -s /data/adb/ap/bin/magiskpolicy ] || [ -s /data/adb/apd ]; then
+    ui_print "- Daemon binaries staged (policy applied by app on first boot)"
+  else
+    ui_print "- WARNING: apd copy failed - daemon install incomplete"
   fi
   if command -v restorecon >/dev/null 2>&1; then
     restorecon /data/adb/apd 2>/dev/null
@@ -627,7 +646,7 @@ if [ -f "$WORK/new-boot.img" ]; then
 fi
 
 ui_print "****************************"
-ui_print " FolkPatch installed! (keyless - signature auth)"
+ui_print " FolkPatch installed! (superkey: su)"
 ui_print " Stock backup: $BKDIR/stock-$TARGET_KIND$SLOT.img"
 if [ "$DAEMON_OK" = "1" ]; then
   ui_print " Daemon: /data/adb/apd installed - INSTANT ROOT on reboot"
@@ -645,4 +664,18 @@ ui_print " 4. Verify with Root Checker app"
 ui_print " Plan B (PC): fastboot flash $TARGET_KIND FolkPatch-patched-$TARGET_KIND.img"
 ui_print " Bootloop? Flash Uninstaller ZIP or restore stock backup."
 ui_print "****************************"
+# Persistent flash report on sdcard (survives reboot; user can send it).
+{
+  echo "FolkPatch v10.3 flash report"
+  echo "date: $(date 2>/dev/null)"
+  echo "target: $TARGET_KIND ($TARGET)"
+  echo "slot: $SLOT"
+  echo "superkey: su"
+  echo "daemon: $DAEMON_OK"
+  echo "backup: $BKDIR/stock-$TARGET_KIND$SLOT.img"
+  echo "inactive: ${INACTIVE_FLASHED:-none}"
+} > "$BKDIR/FolkPatch-flash-report.txt" 2>/dev/null
+for d in /sdcard /data/media/0 /data/media /external_sd; do
+  if [ -d "$d" ]; then cp -f "$BKDIR/FolkPatch-flash-report.txt" "$d/FolkPatch-flash-report.txt" 2>/dev/null; fi
+done
 exit 0

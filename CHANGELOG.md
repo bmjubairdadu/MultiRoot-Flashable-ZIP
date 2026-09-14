@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [v10.3-kp0.13.8] — 2026-09-14 — fixed superkey "su" (source-verified)
+
+### Fixed
+- 🐛 **Root na howar asol karon (source code proman):** kernel source
+  (`predata.c`) onujayi key na dile boot-e RANDOM key toiri hoy — app
+  (`superKey = "su"`) seta guess korte pare na, sob supercall `-EPERM`,
+  app dekhay "not installed". Ar `-S ApXXX` dile hash mismatch-e same
+  `-EPERM`. Documented manual method (`-s "su"`) + app default — duitai
+  `"su"` — tai ekhon ZIP kernel-e plaintext `superkey=su` bosay; prothom
+  compare-ei match, `sc_ready("su")` true.
+- 🐛 Verify ekhon `superkey=su` read-back check kore (mismatch hole abort);
+  `root_superkey` zeroed thaka normal (kono `-S` nei).
+- 🐛 Daemon section app-er `installApatch()`-er sathe milano: su_path =
+  `/system/bin/su`, ori.img backup, restorecon; flash report ekhon
+  sdcard-eo save hoy (`FolkPatch-flash-report.txt`).
+- 🐛 `update-binary` banner v10.3 (age v10.1 lekha chilo — purono log-e
+  confusion hoto).
+
 ## [v10.2-kp0.13.8] — 2026-09-14 — KEYLESS patch (the real root fix, device-proven)
 
 ### Fixed

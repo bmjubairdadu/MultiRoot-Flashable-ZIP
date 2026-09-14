@@ -143,14 +143,13 @@ case "$SRC" in
   *) KIND="boot" ;;
 esac
 
-# KEYLESS patch (official FolkTool / app flow): NO -s / -S flags.
-# The Manager (v4.3+) authenticates by APK signature with default superkey
-# "su". A baked-in key breaks that handshake, so no key is generated at all.
-# Old key files from keyed ZIPs are removed to avoid confusion.
+# Superkey = fixed default "su" (documented manual method + app default).
+# Keyless would leave a random kernel key; -S would hash-lock a key the app
+# never sends. Plaintext "su" matches on first compare. Old key files removed.
 for d in /sdcard /data/media/0 /data/media /external_sd; do
   rm -f "$d/FolkPatch-key.txt" 2>/dev/null
 done
-ui_print "- Auth mode: keyless (signature verification, no superkey)"
+ui_print "- Auth mode: default superkey 'su' (no key entry needed)"
 
 OUTDIR=""
 for d in /sdcard /data/media/0 /external_sd; do
@@ -181,9 +180,9 @@ fi
 
 if [ "$BB_OK" = "1" ]; then "$BB" mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; else mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; fi
 
-# Patch keyless (same as FolkTool): no -s / -S. Signature auth needs no key.
-ui_print "- Patching kernel (keyless) ..."
-kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+# Patch with fixed default key (same as documented manual method).
+ui_print "- Patching kernel (superkey: su) ..."
+kp_run -p -i kernel-origin -k "$KPIMG" -s "su" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
 if [ "$RC" -ne 0 ]; then
   print_file "$WORK/patch.log"
@@ -193,10 +192,13 @@ fi
 ui_print "- Verifying patch ..."
 kp_run -i kernel -l >"$WORK/verify.log" 2>&1
 if run_grep -qi "patched=false" "$WORK/verify.log"; then ui_print "- WARNING: verify reports patched=false (continuing anyway)"; fi
-# Keyless verify: zeroed/empty root_superkey is EXPECTED (signature auth).
-_VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
+# Verify: superkey must read back as "su".
+_VL=$(run_grep -i "^superkey=" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
-  ui_print "- Key Info: $_VL (keyless OK)"
+  case "$_VL" in
+    superkey=su*) ui_print "- Superkey OK: su" ;;
+    *) abort "superkey mismatch ($_VL) - app sends 'su'!" ;;
+  esac
 fi
 if run_grep -qi "patched=true" "$WORK/verify.log"; then
   ui_print "- Kernel patched OK (patched=true)"
@@ -226,7 +228,7 @@ if [ -f "$WORK/FolkPatch.apk" ]; then
 fi
 
 if [ -n "$OLD_LD_PRELOAD" ]; then export LD_PRELOAD="$OLD_LD_PRELOAD"; fi
-if [ -n "$OLD_LD_CONFIG" ]; then export LD_CONFIG_FILE="$OLD_LD_CONFIG"; fi
+if [ -n "$OLD_LD_CONFIG" ]; thensuperkey: su LD_CONFIG_FILE="$OLD_LD_CONFIG"; fi
 
 ui_print "****************************"
 ui_print " Patched image ready (keyless):"

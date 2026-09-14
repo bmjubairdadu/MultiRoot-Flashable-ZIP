@@ -25,7 +25,7 @@ raw_print() {
 
 raw_print "****************************"
 raw_print " FolkPatch Recovery Installer"
-raw_print " v10.1 (KP-0.13.8)"
+raw_print " v10.3 (KP-0.13.8)"
 raw_print " OUTFD=$OUTFD ZIP=$ZIPFILE"
 raw_print " DBG=$DBG"
 raw_print "****************************"
