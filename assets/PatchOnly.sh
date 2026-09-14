@@ -143,27 +143,14 @@ case "$SRC" in
   *) KIND="boot" ;;
 esac
 
-# Generate or reuse superkey (official format: Ap + uuid segment)
-SKEY=""
+# KEYLESS patch (official FolkTool / app flow): NO -s / -S flags.
+# The Manager (v4.3+) authenticates by APK signature with default superkey
+# "su". A baked-in key breaks that handshake, so no key is generated at all.
+# Old key files from keyed ZIPs are removed to avoid confusion.
 for d in /sdcard /data/media/0 /data/media /external_sd; do
-  if [ -f "$d/FolkPatch-key.txt" ]; then
-    SKEY=$(cat "$d/FolkPatch-key.txt" 2>/dev/null | head -n 1 | tr -d ' \t\r\n')
-    if [ -n "$SKEY" ]; then
-      case "$SKEY" in
-        00000000*|*all-zero*) SKEY="" ;;
-        Ap*) break ;;
-        [0-9a-fA-F][0-9a-fA-F]*) SKEY="Ap$SKEY"; break ;;
-        *) SKEY="" ;;
-      esac
-    fi
-  fi
+  rm -f "$d/FolkPatch-key.txt" 2>/dev/null
 done
-if [ -z "$SKEY" ]; then
-  R=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -d- -f1 | tr -d ' \t\r\n')
-  if [ -z "$R" ]; then R="00000000"; fi
-  SKEY="Ap$R"
-fi
-ui_print "- Superkey: $SKEY"
+ui_print "- Auth mode: keyless (signature verification, no superkey)"
 
 OUTDIR=""
 for d in /sdcard /data/media/0 /external_sd; do
@@ -194,19 +181,10 @@ fi
 
 if [ "$BB_OK" = "1" ]; then "$BB" mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; else mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; fi
 
-# Patch with root superkey first (official boot_patch.sh order: -S).
-# -s alone leaves root_superkey zeroed = root will NOT work.
-ui_print "- Patching kernel ..."
-kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+# Patch keyless (same as FolkTool): no -s / -S. Signature auth needs no key.
+ui_print "- Patching kernel (keyless) ..."
+kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
-if [ "$RC" -ne 0 ]; then
-  kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
-  RC=$?
-fi
-if [ "$RC" -ne 0 ]; then
-  kp_run -p -i kernel-origin -s "$SKEY" -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
-  RC=$?
-fi
 if [ "$RC" -ne 0 ]; then
   print_file "$WORK/patch.log"
   abort "patch failed ($RC)"
@@ -215,12 +193,10 @@ fi
 ui_print "- Verifying patch ..."
 kp_run -i kernel -l >"$WORK/verify.log" 2>&1
 if run_grep -qi "patched=false" "$WORK/verify.log"; then ui_print "- WARNING: verify reports patched=false (continuing anyway)"; fi
+# Keyless verify: zeroed/empty root_superkey is EXPECTED (signature auth).
 _VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
-  case "$_VL" in
-    *000000000000*) abort "root_superkey is ZEROED - root will NOT work. Send patch.log to developer!" ;;
-  esac
-  ui_print "- Key Info: $_VL"
+  ui_print "- Key Info: $_VL (keyless OK)"
 fi
 if run_grep -qi "patched=true" "$WORK/verify.log"; then
   ui_print "- Kernel patched OK (patched=true)"
@@ -242,7 +218,6 @@ if [ ! -f "$WORK/new-boot.img" ]; then abort "new-boot.img missing"; fi
 
 OUT="$OUTDIR/FolkPatch-patched-$KIND.img"
 if [ "$BB_OK" = "1" ]; then "$BB" cp -f "$WORK/new-boot.img" "$OUT" 2>/dev/null || abort "cannot write $OUT"; else cp -f "$WORK/new-boot.img" "$OUT" 2>/dev/null || abort "cannot write $OUT"; fi
-echo "$SKEY" > "$OUTDIR/FolkPatch-key.txt" 2>/dev/null
 mkdir -p "$OUTDIR/Download/FolkPatch/BootBackups" 2>/dev/null
 run_cp -f "$SRC" "$OUTDIR/Download/FolkPatch/BootBackups/" 2>/dev/null
 if [ -f "$WORK/FolkPatch.apk" ]; then
@@ -254,11 +229,10 @@ if [ -n "$OLD_LD_PRELOAD" ]; then export LD_PRELOAD="$OLD_LD_PRELOAD"; fi
 if [ -n "$OLD_LD_CONFIG" ]; then export LD_CONFIG_FILE="$OLD_LD_CONFIG"; fi
 
 ui_print "****************************"
-ui_print " Patched image ready:"
+ui_print " Patched image ready (keyless):"
 ui_print " $OUT"
-ui_print " Superkey: $SKEY"
 ui_print " Flash with: fastboot flash $KIND $OUT"
 ui_print " Then reboot and install FolkPatch-Manager.apk"
-ui_print " No key entry needed in the app."
+ui_print " No key entry needed in the app (signature auth)."
 ui_print "****************************"
 exit 0

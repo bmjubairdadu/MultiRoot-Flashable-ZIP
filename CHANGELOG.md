@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [v10.2-kp0.13.8] — 2026-09-14 — KEYLESS patch (the real root fix, device-proven)
+
+### Fixed
+- 🐛 **ZIP-e root na howar ASOL karon (proof soho):** ZIP `-S` diye
+  hash-locked key bosato (`root_superkey=SHA256(key)` — phone-e verify kora),
+  kintu official app/FolkTool flow KEYLESS: `kptools -p -i kernel -k kpimg`
+  (kono `-s`/`-S` nei), auth hoy APK signature + default key `"su"` diye.
+  Kernel key chaile, app `"su"` pathale handshake fail → app dekhay
+  "not installed" jodio `apd` cholche. Ekhon Installer + PatchOnly duitai
+  FolkTool-er moto KEYLESS patch kore — signature auth kaj korbe.
+- 🐛 Phone-e promanito: keyless patch-e `patched=true`,
+  `root_superkey` zeroed — etai official expected state (age abort hoto).
+- 🐛 Purono keyed ZIP-er `FolkPatch-key.txt` flash-er somoy auto-delete
+  (keyless-e key file-er kono kaj nei, sudhu confusion).
+- 🐛 v10.1-er sob fix roilo: 1-script-per-ZIP (sideload), boot-only target,
+  `me.yuki.folk` daemon package, on-partition verify.
+
 ## [v10.1-kp0.13.8] — 2026-09-14 — sideload + key + daemon fixes (device-verified)
 
 ### Fixed

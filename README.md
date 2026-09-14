@@ -1,6 +1,6 @@
 # FolkPatch Flashable ZIP
 
-**FolkPatch v10.1 / KernelPatch 0.13.8** — Recovery-flashable root for ARM64 Android devices.
+**FolkPatch v10.2 / KernelPatch 0.13.8** — Recovery-flashable root for ARM64 Android devices.
 
 Supported methods:
 - **Recovery Installer** — flash ZIP and get root immediately on reboot (recommended)
@@ -26,9 +26,9 @@ Supported methods:
 
 | File | Purpose |
 |---|---|
-| `FolkPatch-v10.1-kp0.13.8-Recovery-Installer.zip` | Flash in recovery for instant root |
-| `FolkPatch-v10.1-kp0.13.8-Boot-Patcher.zip` | Patch a stock boot.img (no auto-flash) |
-| `FolkPatch-v10.1-kp0.13.8-Uninstaller.zip` | Restore stock / unroot |
+| `FolkPatch-v10.2-kp0.13.8-Recovery-Installer.zip` | Flash in recovery for instant root |
+| `FolkPatch-v10.2-kp0.13.8-Boot-Patcher.zip` | Patch a stock boot.img (no auto-flash) |
+| `FolkPatch-v10.2-kp0.13.8-Uninstaller.zip` | Restore stock / unroot |
 | `FolkPatch.apk` | Official Manager APK (bundled inside ZIPs too) |
 | `SHA256SUMS.txt` | Checksums for verification |
 
@@ -37,7 +37,7 @@ Supported methods:
 ## Method 1 — Recovery Installer (recommended)
 
 1. Copy the Installer ZIP to your sdcard.
-2. Boot into recovery → flash `FolkPatch-v10.1-kp0.13.8-Recovery-Installer.zip`.
+2. Boot into recovery → flash `FolkPatch-v10.2-kp0.13.8-Recovery-Installer.zip`.
 3. The installer will:
    - Detect your boot partition automatically
    - Save a stock backup to sdcard (`FolkPatch-Backup/`)
@@ -58,7 +58,7 @@ Supported methods:
 
 1. Extract your stock `boot.img` from your firmware package.
 2. Place it on sdcard named `FolkPatch-stock-boot.img`.
-3. Flash `FolkPatch-v10.1-kp0.13.8-Boot-Patcher.zip` in recovery.
+3. Flash `FolkPatch-v10.2-kp0.13.8-Boot-Patcher.zip` in recovery.
    - This does **not** touch any partition.
    - Output: `FolkPatch-patched-boot.img` on sdcard, and `FolkPatch-key.txt`.
 4. On your PC:
@@ -73,7 +73,7 @@ Supported methods:
 
 ## Uninstall / Restore
 
-Flash `FolkPatch-v10.1-kp0.13.8-Uninstaller.zip` in recovery.
+Flash `FolkPatch-v10.2-kp0.13.8-Uninstaller.zip` in recovery.
 
 - If a stock backup exists in `FolkPatch-Backup/`, it is restored automatically.
 - If no backup is found, the installer performs a live kernel unpatch (`kptools -u`).
@@ -107,7 +107,7 @@ No binaries are committed to this repository. The build script downloads the off
 
 ```sh
 python tools/build.py
-# outputs: dist/FolkPatch-v10.1-kp0.13.8-*.zip + SHA256SUMS.txt
+# outputs: dist/FolkPatch-v10.2-kp0.13.8-*.zip + SHA256SUMS.txt
 ```
 
 Pushing a `v*` tag triggers the GitHub Actions workflow which runs the same build and attaches the ZIPs to the release automatically.

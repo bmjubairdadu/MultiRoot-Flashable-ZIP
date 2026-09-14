@@ -137,7 +137,7 @@ if [ ! -f "$KPIMG" ]; then abort "kpimg missing"; fi
 
 ui_print "****************************"
 ui_print " FolkPatch Recovery Installer"
-ui_print " v10.1 / KP-0.13.8"
+ui_print " v10.2 / KP-0.13.8"
 ui_print " Universal boot-only patcher"
 ui_print "****************************"
 
@@ -237,33 +237,14 @@ else
   abort "No boot partition found. Use Boot-Patcher ZIP + fastboot instead."
 fi
 
-# Generate or reuse superkey (official format: Ap + uuid segment, same as
-# boot_patch.sh: skey=$(cat /proc/sys/kernel/random/uuid | cut -d- -f1)).
-# A key WITHOUT the Ap prefix (old ZIP format) will NOT match the manual /
-# app patch, so legacy bare-hex keys are normalized to Ap<key>.
-SKEY=""
-for d in /sdcard /data/media/0 /data/media /external_sd; do
-  if [ -f "$d/FolkPatch-key.txt" ]; then
-    SKEY=$(cat "$d/FolkPatch-key.txt" 2>/dev/null | head -n 1 | tr -d ' \t\r\n')
-    if [ -n "$SKEY" ]; then
-      case "$SKEY" in
-        00000000*|*all-zero*) SKEY="" ;;
-        Ap*) ui_print "- Reusing saved superkey from $d/FolkPatch-key.txt"; break ;;
-        [0-9a-fA-F][0-9a-fA-F]*)
-          SKEY="Ap$SKEY"
-          ui_print "- Reusing saved superkey (normalized to Ap format) from $d/FolkPatch-key.txt"
-          break ;;
-        *) SKEY="" ;;
-      esac
-    fi
-  fi
-done
-if [ -z "$SKEY" ]; then
-  R=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -d- -f1 | tr -d ' \t\r\n')
-  if [ -z "$R" ]; then R="00000000"; fi
-  SKEY="Ap$R"
-  ui_print "- New superkey: $SKEY"
-fi
+# KEYLESS patch (official FolkTool / app flow): NO -s / -S flags.
+# FolkTool's kptools_service.dart patches with only
+#   kptools -p -i kernel -k kpimg -o kernel
+# and the Manager (v4.3+, incl. v5.0 on this device) authenticates by APK
+# signature, default superkey "su". A hash-locked -S key BREAKS that
+# handshake (kernel expects the key, app sends "su"), so the app shows
+# "not installed" even though apd runs. Hence: no key generation, no reuse.
+ui_print "- Auth mode: keyless (signature verification, no superkey)"
 
 # Backup directory
 BKDIR=""
@@ -334,11 +315,10 @@ mkdir -p /data/FolkPatch-Backup 2>/dev/null
 if [ ! -s "/data/FolkPatch-Backup/stock-$TARGET_KIND$SLOT.img" ]; then
   run_cp -f "$WORK/boot.img" "/data/FolkPatch-Backup/stock-$TARGET_KIND$SLOT.img" 2>/dev/null
 fi
-# Save key to sdcard for future use
-echo "$SKEY" > "$BKDIR/FolkPatch-key.txt" 2>/dev/null
-echo "$SKEY" > /data/FolkPatch-Backup/FolkPatch-key.txt 2>/dev/null
-for d in /sdcard /data/media/0 /data/media /external_sd; do
-  if [ -d "$d" ]; then echo "$SKEY" > "$d/FolkPatch-key.txt" 2>/dev/null; fi
+# Remove stale key files from old keyed ZIPs (keyless needs none; a leftover
+# key only confuses: kernel has no key but file claims one).
+for d in /sdcard /data/media/0 /data/media /external_sd "$BKDIR" /data/FolkPatch-Backup; do
+  rm -f "$d/FolkPatch-key.txt" 2>/dev/null
 done
 ui_print "- Stock backup saved"
 if run_cp -f "$WORK/boot.img" /data/boot.img 2>/dev/null; then
@@ -363,22 +343,11 @@ if grep -qi "patched=true" "$WORK/vorig.log"; then
   fi
 fi
 
-ui_print "- Patching kernel with Superkey: $SKEY"
-# Official order (boot_patch.sh): -S (root-skey, hash-verified) first.
-# -s alone leaves root_superkey zeroed; -S alone leaves superkey empty —
-# both give working root, but -S matches the manual/app patch on this device.
-kp_run -p -i kernel-origin -k "$KPIMG" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
+ui_print "- Patching kernel (keyless, signature auth) ..."
+# Keyless = same as FolkTool: no -s / -S. The app authenticates by APK
+# signature with default superkey "su"; any baked-in key breaks the handshake.
+kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
-if [ "$RC" -ne 0 ] || [ ! -f kernel ]; then
-  ui_print "- Root-skey patch failed, trying skey mode..."
-  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
-  RC=$?
-fi
-if [ "$RC" -ne 0 ] || [ ! -f kernel ]; then
-  ui_print "- Trying combined mode..."
-  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
-  RC=$?
-fi
 if [ "$RC" -ne 0 ]; then
   print_file "$WORK/patch.log"
   abort "patch failed ($RC)"
@@ -399,12 +368,11 @@ else
     ui_print "- WARNING: verify log has no patched=true line"
   fi
 fi
+# Keyless verify: root_superkey zeroed/empty is EXPECTED (signature auth).
+# Only patched=true matters.
 _VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
-  case "$_VL" in
-    *000000000000*) abort "root_superkey is ZEROED (skey-only patch) - root will NOT work. Send patch.log to developer!" ;;
-  esac
-  ui_print "- Key Info: $_VL"
+  ui_print "- Key Info: $_VL (keyless OK)"
 fi
 
 if ! kp_run -i kernel-origin -f 2>/dev/null | run_grep -q "CONFIG_KALLSYMS_ALL=y"; then
@@ -462,16 +430,8 @@ if [ -n "$OTHER" ]; then
       run_cp -f "$WORK/obot.img" "$WORK/boot.img" 2>/dev/null
       if kp_run unpack boot.img >"$WORK/ounpack.log" 2>&1 && [ -f kernel ]; then
         mv kernel kernel-origin 2>/dev/null
-        # Same official order as current slot: -S first, then -s, then both.
-        if kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
-        if [ "$_orc" -ne 0 ]; then
-          kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1
-          _orc=$?
-        fi
-        if [ "$_orc" -ne 0 ]; then
-          kp_run -p -i kernel-origin -s "$SKEY" -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1
-          _orc=$?
-        fi
+        # Keyless, same as current slot.
+        if kp_run -p -i kernel-origin -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
         if [ "$_orc" -eq 0 ] && kp_run repack boot.img >"$WORK/orepack.log" 2>&1 && [ -f "$WORK/new-boot.img" ]; then
           run_cp -f "$WORK/new-boot.img" "$WORK/new-boot-inactive.img" 2>/dev/null
           _osz=$(wc -c < "$WORK/new-boot.img" 2>/dev/null | tr -d ' \t\r\n')
@@ -667,8 +627,7 @@ if [ -f "$WORK/new-boot.img" ]; then
 fi
 
 ui_print "****************************"
-ui_print " FolkPatch installed!"
-ui_print " Superkey: $SKEY"
+ui_print " FolkPatch installed! (keyless - signature auth)"
 ui_print " Stock backup: $BKDIR/stock-$TARGET_KIND$SLOT.img"
 if [ "$DAEMON_OK" = "1" ]; then
   ui_print " Daemon: /data/adb/apd installed - INSTANT ROOT on reboot"
