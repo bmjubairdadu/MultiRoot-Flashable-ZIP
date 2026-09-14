@@ -246,10 +246,10 @@ if [ -f "$WORK/FolkPatch.apk" ]; then
 fi
 
 if [ -n "$OLD_LD_PRELOAD" ]; then export LD_PRELOAD="$OLD_LD_PRELOAD"; fi
-if [ -n "$OLD_LD_CONFIG" ]; thensuperkey: su LD_CONFIG_FILE="$OLD_LD_CONFIG"; fi
+if [ -n "$OLD_LD_CONFIG" ]; then export LD_CONFIG_FILE="$OLD_LD_CONFIG"; fi
 
 ui_print "****************************"
-ui_print " Patched image ready (keyless):"
+ui_print " Patched image ready (superkey: su):"
 ui_print " $OUT"
 ui_print " Flash with: fastboot flash $KIND $OUT"
 ui_print " Then reboot and install FolkPatch-Manager.apk"

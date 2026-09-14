@@ -5,8 +5,8 @@ Downloads nothing by default: uses FolkPatch.apk placed next to this repo
 (see APK_URL below), extracts busybox/kptools/kpimg, packs 3 ZIPs + SHA256SUMS.
 
 Usage:
-    python tools/build.py [--apk PATH] [--out dist] [--version 5.0] [--kp 0.13.8]
-    python tools/build.py --tag v5.1-kp0.13.8   # tag drives ZIP filenames
+    python tools/build.py [--apk PATH] [--out dist] [--version 1.0] [--kp 0.13.8]
+    python tools/build.py --tag v1.0-kp0.13.8   # tag drives ZIP filenames
 """
 import argparse
 import hashlib
@@ -89,7 +89,7 @@ if __name__ == "__main__":
     ap.add_argument("--version", default="1.0")
     ap.add_argument("--kp", default="0.13.8")
     ap.add_argument("--tag", default="",
-                    help="Release tag like v5.1-kp0.13.8; drives ZIP names + README.txt")
+                    help="Release tag like v1.0-kp0.13.8; drives ZIP names + README.txt")
     args = ap.parse_args()
 
     if args.tag:
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     rd_lines = [
         "FolkPatch v%s (KP-%s) - Magisk-style Recovery ZIPs" % (args.version, args.kp),
         "See https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP for guide.",
-        "1) *-Recovery-Installer.zip = direct flash boot/init_boot from recovery.",
+        "1) *-Recovery-Installer.zip = direct flash boot from recovery.",
         "2) *-Boot-Patcher.zip = patch stock img on sdcard (safe, no auto-flash).",
         "3) *-Uninstaller.zip = restore stock backup or live-unpatch.",
         "Needs ARM64 + CONFIG_KALLSYMS=y. Keep stock backup. GPL-3.0.",
