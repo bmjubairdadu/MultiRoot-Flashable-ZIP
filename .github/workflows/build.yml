@@ -33,9 +33,26 @@ jobs:
         with:
           name: flashable-zips
           path: dist/*
+      - name: Extract release notes from CHANGELOG
+        run: |
+          python - <<'EOF'
+          import re
+          tag = "${{ github.ref_name }}"
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          parts = re.split(r"(?m)^## \[", text)
+          body = ""
+          for p in parts[1:]:
+              if p.startswith(tag + "]"):
+                  body = "## [" + p.rstrip() + "\n"
+                  break
+          if not body:
+              body = "Release %s\n" % tag
+          open("release_notes.md", "w", encoding="utf-8").write(body)
+          print(body)
+          EOF
       - name: Attach to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: release_notes.md

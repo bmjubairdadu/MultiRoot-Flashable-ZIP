@@ -1,9 +1,8 @@
 # Changelog
 
 All notable changes to this project are documented here.
-This project follows [Semantic Versioning](https://semver.org/):
-`vX.Y-kpA.B.C` where `X.Y` is this installer and `A.B.C` is the
-embedded KernelPatch.
+Versioning: `vX.Y-kpA.B.C` where `X.Y` is this installer and `A.B.C`
+is the embedded KernelPatch.
 
 ## [v1.0-kp0.13.8] — 2026-09-14 — First stable release ✅
 
