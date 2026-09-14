@@ -59,16 +59,18 @@ def build(outname, script_name, script_data, ub, us, rd, bb, kt, kp, apk, extra=
     for name, data in (extra or []):
         w(z, name, data, 0o755)
     w(z, "assets/" + script_name, script_data, 0o755)
-    # Also include assets folder contents (apd, fpd, resetprop, etc.)
-    # Skip the script file itself since it's already added above.
-    # Note: kpimg is included via assets/ folder walk below (from assets/kpimg file).
-    # Skip the script file itself since it's already added above.
+    # Also include assets folder contents (apd, fpd, resetprop, kpimg).
+    # CRITICAL: pack ONLY the selected installer script. Packing all *.sh
+    # files breaks ADB sideload: recovery renames the ZIP to
+    # /sideload/package.zip, so update-binary cannot pick a script by ZIP
+    # filename and always falls back to InstallFP.sh (wrong ZIP = no root /
+    # wrong action). One script per ZIP keeps sideload working.
     assets_dir = os.path.join(ROOT, "assets")
     if os.path.isdir(assets_dir):
         for root, dirs, files in os.walk(assets_dir):
             for fname in files:
-                if fname == script_name:
-                    continue  # already added as assets/<script_name>
+                if fname.endswith(".sh"):
+                    continue  # selected script already added above; skip others
                 fpath = os.path.join(root, fname)
                 arcname = os.path.relpath(fpath, ROOT)
                 with open(fpath, "rb") as f:
@@ -84,7 +86,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--apk", default=os.path.join(ROOT, "FolkPatch.apk"))
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
-    ap.add_argument("--version", default="5.0")
+    ap.add_argument("--version", default="10.1")
     ap.add_argument("--kp", default="0.13.8")
     ap.add_argument("--tag", default="",
                     help="Release tag like v5.1-kp0.13.8; drives ZIP names + README.txt")

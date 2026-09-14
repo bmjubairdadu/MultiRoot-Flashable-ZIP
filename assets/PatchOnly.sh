@@ -143,14 +143,16 @@ case "$SRC" in
   *) KIND="boot" ;;
 esac
 
-# Generate or reuse superkey
+# Generate or reuse superkey (official format: Ap + uuid segment)
 SKEY=""
 for d in /sdcard /data/media/0 /data/media /external_sd; do
   if [ -f "$d/FolkPatch-key.txt" ]; then
     SKEY=$(cat "$d/FolkPatch-key.txt" 2>/dev/null | head -n 1 | tr -d ' \t\r\n')
     if [ -n "$SKEY" ]; then
       case "$SKEY" in
+        00000000*|*all-zero*) SKEY="" ;;
         Ap*) break ;;
+        [0-9a-fA-F][0-9a-fA-F]*) SKEY="Ap$SKEY"; break ;;
         *) SKEY="" ;;
       esac
     fi
@@ -192,12 +194,13 @@ fi
 
 if [ "$BB_OK" = "1" ]; then "$BB" mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; else mv kernel kernel-origin 2>/dev/null || abort "cannot stage kernel"; fi
 
-# Patch with real superkey (-s first = same as boot_patch.sh, then -S fallback)
+# Patch with root superkey first (official boot_patch.sh order: -S).
+# -s alone leaves root_superkey zeroed = root will NOT work.
 ui_print "- Patching kernel ..."
-kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
 if [ "$RC" -ne 0 ]; then
-  kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
+  kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/patch.log" 2>&1
   RC=$?
 fi
 if [ "$RC" -ne 0 ]; then
@@ -215,7 +218,7 @@ if run_grep -qi "patched=false" "$WORK/verify.log"; then ui_print "- WARNING: ve
 _VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
   case "$_VL" in
-    *000000000000*) ui_print "- WARNING: root_superkey reported as ZEROED" ;;
+    *000000000000*) abort "root_superkey is ZEROED - root will NOT work. Send patch.log to developer!" ;;
   esac
   ui_print "- Key Info: $_VL"
 fi

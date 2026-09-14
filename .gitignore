@@ -3,6 +3,12 @@ FolkPatch.apk
 dist/
 *.zip
 !docs/
+# local test/extract junk (never commit: device logs, extracted payloads)
+fp_install/
+fp_debug.log
+recovery.log
+recovery_*.log
+tools/__pycache__/
 # release drafts
 GPL_BODY.txt
 LICENSE_TMP.txt

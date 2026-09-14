@@ -155,15 +155,11 @@ find_part() {
 
 TARGET=""
 TARGET_KIND="boot"
-for _n in init_boot vendor_boot boot kern-a android_boot kernel bootimg lnx; do
+for _n in boot kern-a android_boot kernel bootimg lnx; do
   T=$(find_part "$_n")
   if [ -n "$T" ]; then
     TARGET="$T"
-    case "$_n" in
-      init_boot*) TARGET_KIND="init_boot" ;;
-      vendor_boot*) TARGET_KIND="vendor_boot" ;;
-      *) TARGET_KIND="boot" ;;
-    esac
+    TARGET_KIND="boot"
     break
   fi
 done

@@ -2,6 +2,35 @@
 
 All notable changes to this project are documented here.
 
+## [v10.1-kp0.13.8] — 2026-09-14 — sideload + key + daemon fixes (device-verified)
+
+### Fixed
+- 🐛 **Boot-Patcher/Uninstaller sideload-e vul kaj korto:** `build.py`
+  protita ZIP-e 3-ta script-i dhukiye dito. ADB sideload-e recovery ZIP-ke
+  `/sideload/package.zip` nam dey, tai `update-binary` nam dekhe script
+  chinte parto na — sobsomoy Installer cholto. Ekhon protita ZIP-e
+  SUDHU tar nijer script thake (verified: 1 script/ZIP), sideload-eo
+  sothik kaj hoy.
+- 🐛 **Superkey format mismatch:** Installer `Ap` prefix chara key banato,
+  kintu official `boot_patch.sh`/app niyom `Ap + uuid` (device-e `apd`
+  cholche manual patch-e, shetai proman). Purono bare-hex key pele ekhon
+  `Ap<key>`-e normalize hoy; notun key sobsomoy `ApXXXXXXXX` format-e.
+- 🐛 **Patch flag order (phone-e promanito):** `-s` eka dile
+  `root_superkey` zeroed theke jay = root hobe na. Official order-e ekhon
+  age `-S` (root-skey), tarpor `-s`, tarpor combined — current + inactive
+  slot + PatchOnly tinti-tei. Zeroed key pele installer ekhon abort kore
+  (age sudhu warning dito).
+- 🐛 **Daemon-e vul package name:** `com.vst.folkpatch` naamer kono package
+  nei (phone + APK dex-e verified: asol Manager `me.yuki.folk` v5.0).
+  `package_config`-e ekhon `me.yuki.folk` + `com.android.shell` lekha hoy;
+  ostittohin `config`/`key`/`manager_package` file lekha bondho (app ogulo
+  byabohar kore na).
+- 🐛 **`find_block` duplicate + boot-only:** Installer-e function duibar
+  define chilo (ditiyobar hidden-slot check-er pore); ekhon ekbar, byabohar-er
+  agei. Target loop theke `init_boot`/`vendor_boot` bad — kernel sob
+  device-e `boot`-e thake, ramdisk partition-e flash = root hoto na.
+  Uninstaller-eo same boot-only fix.
+
 ## [v10.0-kp0.13.8] — 2026-09-13 — INSTANT ROOT (kernel + daemon, app rule)
 
 ### Fixed

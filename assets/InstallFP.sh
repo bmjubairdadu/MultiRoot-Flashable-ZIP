@@ -137,7 +137,7 @@ if [ ! -f "$KPIMG" ]; then abort "kpimg missing"; fi
 
 ui_print "****************************"
 ui_print " FolkPatch Recovery Installer"
-ui_print " v10.0 / KP-0.13.8"
+ui_print " v10.1 / KP-0.13.8"
 ui_print " Universal boot-only patcher"
 ui_print "****************************"
 
@@ -153,6 +153,31 @@ case "$ABI" in
     if [ -n "$ABI" ]; then ui_print "- WARNING: CPU reports $ABI (requires ARM64)"; fi
     ;;
 esac
+
+# by-name block lookup with multiple fallback paths
+# (defined BEFORE first use: hidden-slot detection below calls find_block)
+find_block() {
+  _b="$1"
+  for p in "/dev/block/by-name/$_b" "/dev/block/bootdevice/by-name/$_b"; do
+    if [ -e "$p" ]; then echo "$p"; return 0; fi
+  done
+  for _m in /dev/block/platform/*/by-name/"$_b"; do
+    if [ -e "$_m" ]; then echo "$_m"; return 0; fi
+  done
+  _dev=$(find /dev/block -iname "$_b" 2>/dev/null | head -n 1)
+  if [ -n "$_dev" ]; then echo "$_dev"; return 0; fi
+  return 1
+}
+
+find_part() {
+  if [ -n "$SLOT" ]; then
+    _t=$(find_block "$1$SLOT")
+    if [ -n "$_t" ]; then echo "$_t"; return 0; fi
+  fi
+  _t=$(find_block "$1")
+  if [ -n "$_t" ]; then echo "$_t"; return 0; fi
+  return 1
+}
 
 # Detect A/B slot from cmdline first (more reliable than getprop in recovery)
 SLOT=""
@@ -191,42 +216,16 @@ else
   ui_print "- Slot: A-only"
 fi
 
-# by-name block lookup with multiple fallback paths
-find_block() {
-  _b="$1"
-  for p in "/dev/block/by-name/$_b" "/dev/block/bootdevice/by-name/$_b"; do
-    if [ -e "$p" ]; then echo "$p"; return 0; fi
-  done
-  for _m in /dev/block/platform/*/by-name/"$_b"; do
-    if [ -e "$_m" ]; then echo "$_m"; return 0; fi
-  done
-  _dev=$(find /dev/block -iname "$_b" 2>/dev/null | head -n 1)
-  if [ -n "$_dev" ]; then echo "$_dev"; return 0; fi
-  return 1
-}
-
-find_part() {
-  if [ -n "$SLOT" ]; then
-    _t=$(find_block "$1$SLOT")
-    if [ -n "$_t" ]; then echo "$_t"; return 0; fi
-  fi
-  _t=$(find_block "$1")
-  if [ -n "$_t" ]; then echo "$_t"; return 0; fi
-  return 1
-}
-
-# Check for init_boot (Android 13+) or vendor_boot
+# Official rule: kernel ALWAYS lives in boot (old and new devices).
+# init_boot / vendor_boot hold ramdisk only — flashing them = no root.
+# Boot-only target: never touch init_boot / vendor_boot.
 TARGET=""
 TARGET_KIND="boot"
-for _n in init_boot vendor_boot boot kern-a android_boot kernel bootimg lnx; do
+for _n in boot kern-a android_boot kernel bootimg lnx; do
   T=$(find_part "$_n")
   if [ -n "$T" ]; then
     TARGET="$T"
-    case "$_n" in
-      init_boot*) TARGET_KIND="init_boot" ;;
-      vendor_boot*) TARGET_KIND="vendor_boot" ;;
-      *) TARGET_KIND="boot" ;;
-    esac
+    TARGET_KIND="boot"
     break
   fi
 done
@@ -238,7 +237,10 @@ else
   abort "No boot partition found. Use Boot-Patcher ZIP + fastboot instead."
 fi
 
-# Generate or reuse superkey (kernel must have a REAL key — zeroed key = root unavailable)
+# Generate or reuse superkey (official format: Ap + uuid segment, same as
+# boot_patch.sh: skey=$(cat /proc/sys/kernel/random/uuid | cut -d- -f1)).
+# A key WITHOUT the Ap prefix (old ZIP format) will NOT match the manual /
+# app patch, so legacy bare-hex keys are normalized to Ap<key>.
 SKEY=""
 for d in /sdcard /data/media/0 /data/media /external_sd; do
   if [ -f "$d/FolkPatch-key.txt" ]; then
@@ -246,17 +248,20 @@ for d in /sdcard /data/media/0 /data/media /external_sd; do
     if [ -n "$SKEY" ]; then
       case "$SKEY" in
         00000000*|*all-zero*) SKEY="" ;;
-        Ap*|[0-9a-fA-F]*) ui_print "- Reusing saved superkey from $d/FolkPatch-key.txt"; break ;;
+        Ap*) ui_print "- Reusing saved superkey from $d/FolkPatch-key.txt"; break ;;
+        [0-9a-fA-F][0-9a-fA-F]*)
+          SKEY="Ap$SKEY"
+          ui_print "- Reusing saved superkey (normalized to Ap format) from $d/FolkPatch-key.txt"
+          break ;;
         *) SKEY="" ;;
       esac
     fi
   fi
 done
 if [ -z "$SKEY" ]; then
-  # Generate a standardized key compatible with both App and Manual patch
-  SKEY=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-16)
-  if [ -z "$SKEY" ]; then SKEY="f01kpatcf01kpatc"; fi
-  ui_print "- Using Superkey: $SKEY"
+  R=$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -d- -f1 | tr -d ' \t\r\n')
+  if [ -z "$R" ]; then R="00000000"; fi
+  SKEY="Ap$R"
   ui_print "- New superkey: $SKEY"
 fi
 
@@ -359,12 +364,19 @@ if grep -qi "patched=true" "$WORK/vorig.log"; then
 fi
 
 ui_print "- Patching kernel with Superkey: $SKEY"
-# Use both -s and -S for maximum compatibility with FolkPatch/APatch kernels
-kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
+# Official order (boot_patch.sh): -S (root-skey, hash-verified) first.
+# -s alone leaves root_superkey zeroed; -S alone leaves superkey empty —
+# both give working root, but -S matches the manual/app patch on this device.
+kp_run -p -i kernel-origin -k "$KPIMG" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
 RC=$?
 if [ "$RC" -ne 0 ] || [ ! -f kernel ]; then
-  ui_print "- Standard patch failed, trying legacy mode..."
-  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" --compact -o kernel >>"$WORK/patch.log" 2>&1
+  ui_print "- Root-skey patch failed, trying skey mode..."
+  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
+  RC=$?
+fi
+if [ "$RC" -ne 0 ] || [ ! -f kernel ]; then
+  ui_print "- Trying combined mode..."
+  kp_run -p -i kernel-origin -k "$KPIMG" -s "$SKEY" -S "$SKEY" -o kernel >"$WORK/patch.log" 2>&1
   RC=$?
 fi
 if [ "$RC" -ne 0 ]; then
@@ -390,7 +402,7 @@ fi
 _VL=$(run_grep -i "root_superkey" "$WORK/verify.log" 2>/dev/null | head -n 1)
 if [ -n "$_VL" ]; then
   case "$_VL" in
-    *000000000000*) ui_print "- WARNING: root_superkey reported as ZEROED" ;;
+    *000000000000*) abort "root_superkey is ZEROED (skey-only patch) - root will NOT work. Send patch.log to developer!" ;;
   esac
   ui_print "- Key Info: $_VL"
 fi
@@ -450,9 +462,10 @@ if [ -n "$OTHER" ]; then
       run_cp -f "$WORK/obot.img" "$WORK/boot.img" 2>/dev/null
       if kp_run unpack boot.img >"$WORK/ounpack.log" 2>&1 && [ -f kernel ]; then
         mv kernel kernel-origin 2>/dev/null
-        if kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
+        # Same official order as current slot: -S first, then -s, then both.
+        if kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1; then _orc=0; else _orc=$?; fi
         if [ "$_orc" -ne 0 ]; then
-          kp_run -p -i kernel-origin -S "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1
+          kp_run -p -i kernel-origin -s "$SKEY" -k "$KPIMG" -o kernel >"$WORK/opatch.log" 2>&1
           _orc=$?
         fi
         if [ "$_orc" -ne 0 ]; then
@@ -592,36 +605,18 @@ if [ -d /data/adb ]; then
   chmod 755 /data/adb/ap/bin/busybox /data/adb/ap/bin/kptools /data/adb/ap/bin/resetprop 2>/dev/null
   ln -sf /data/adb/apd /data/adb/ap/bin/apd 2>/dev/null
   if [ ! -s /data/adb/ap/su_path ]; then echo "/system/bin/su" > /data/adb/ap/su_path 2>/dev/null; fi
-  # Automatic root setup: grant shell and manager root by default if possible
+  # Pre-authorize the real Manager package (verified: me.yuki.folk v5.0 on
+  # device + in APK dex) and shell so root works right after reboot.
   touch /data/adb/ap/package_config 2>/dev/null
-  # Full automatic root setup with common package names
-  # Grant root to manager and shell (append to avoid removing existing ones)
-  for pc in /data/adb/ap/package_config /data/adb/fp/package_config; do
-    mkdir -p $(dirname "$pc") 2>/dev/null
-    for pkg in com.vst.folkpatch com.folkpatch.manager com.f0lk.patch com.android.shell; do
-      if ! run_grep -q "$pkg" "$pc" 2>/dev/null; then
-        echo "$pkg" >> "$pc" 2>/dev/null
-      fi
+  for pc in /data/adb/ap/package_config; do
+    mkdir -p "$(dirname "$pc")" 2>/dev/null
+    for pkg in me.yuki.folk com.android.shell; do
+      echo "$pkg" >> "$pc" 2>/dev/null
     done
     if [ "$BB_OK" = "1" ]; then "$BB" sort -u "$pc" -o "$pc" 2>/dev/null; fi
     chmod 644 "$pc" 2>/dev/null
   done
-  
-  # Sync manager and key in config
-  for cfg in /data/adb/ap/config /data/adb/fp/config; do
-    mkdir -p $(dirname "$cfg") 2>/dev/null
-    echo "root_manager=com.vst.folkpatch" > "$cfg" 2>/dev/null
-    echo "superkey=$SKEY" >> "$cfg" 2>/dev/null
-    echo "$SKEY" > "$(dirname "$cfg")/key" 2>/dev/null
-    chmod 644 "$cfg" "$(dirname "$cfg")/key" 2>/dev/null
-  done
-  # Important: write the key to a place where the app can ALWAYS find it
-  echo "$SKEY" > /data/adb/ap/superkey 2>/dev/null
-  chmod 644 /data/adb/ap/superkey 2>/dev/null
-  # Sort and unique
-  if [ "$BB_OK" = "1" ]; then
-    "$BB" sort -u /data/adb/ap/package_config -o /data/adb/ap/package_config 2>/dev/null
-  fi
+
   touch /data/adb/ap/version 2>/dev/null
   if [ -s "$BKDIR/stock-$TARGET_KIND$SLOT.img" ]; then
     run_cp -f "$BKDIR/stock-$TARGET_KIND$SLOT.img" /data/adb/ap/ori.img 2>/dev/null
