@@ -46,28 +46,41 @@ unset LD_CONFIG_FILE 2>/dev/null
 
 # kptools needs Android linker + bionic libs from the real system.
 # Recovery /system is a stub; mount real system + APEX, then run kptools directly.
+# Universal: slot-aware system lookup (current SLOT first), vendor fallback,
+# and apexd-style flattened APEX search so non-A/B, A/B, Virtual-A/B and
+# dynamic-partition recoveries all resolve linker64.
 SYS_OK=0
 if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then
   SYS_OK=1
 else
   mkdir -p /system_root 2>/dev/null
-  for _p in /dev/block/bootdevice/by-name/system_b /dev/block/by-name/system_b \
-             /dev/block/bootdevice/by-name/system /dev/block/by-name/system; do
+  for _p in /dev/block/bootdevice/by-name/system"$SLOT" /dev/block/by-name/system"$SLOT" \
+             /dev/block/bootdevice/by-name/system /dev/block/by-name/system \
+             /dev/block/bootdevice/by-name/system_a /dev/block/by-name/system_a \
+             /dev/block/mapper/system"$SLOT" /dev/block/mapper/system; do
     if [ -e "$_p" ]; then
       mount -o ro "$_p" /system_root 2>/dev/null
       if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then SYS_OK=1; break; fi
+      # super-partition devices: system may be a logical volume listing only
+      if [ -d /system_root/system ] || [ -d /system_root/bin ]; then SYS_OK=1; break; fi
     fi
   done
 fi
 SYSROOT=""
 if [ -f /system_root/system/build.prop ]; then SYSROOT="/system_root/system"; else SYSROOT="/system_root"; fi
+# Vendor libs (some kptools builds need them); mount read-only, best effort.
+mkdir -p /vendor_lib 2>/dev/null
+for _v in /dev/block/bootdevice/by-name/vendor"$SLOT" /dev/block/by-name/vendor \
+           /dev/block/mapper/vendor"$SLOT" /dev/block/mapper/vendor; do
+  if [ -e "$_v" ]; then mount -o ro "$_v" /vendor_lib 2>/dev/null && break; fi
+done
 mkdir -p /apex 2>/dev/null
 APEX_SRC=""
-for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
   if [ -d "$_a/com.android.runtime" ]; then APEX_SRC="$_a"; break; fi
 done
 if [ -z "$APEX_SRC" ]; then
-  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
     if [ -d "$_a" ]; then APEX_SRC="$_a"; break; fi
   done
 fi
@@ -78,6 +91,17 @@ if [ -n "$APEX_SRC" ]; then
     mount -o bind "$APEX_SRC/com.android.runtime" /apex/com.android.runtime 2>/dev/null
   fi
 fi
+# Flattened APEX fallback (Android 10+ may ship deapexer-style dirs).
+if [ ! -d /apex/com.android.runtime/lib64/bionic ]; then
+  for _r in /system_root/com.android.runtime /system_root/system/com.android.runtime \
+             "$SYSROOT/com.android.runtime" /vendor_lib/com.android.runtime; do
+    if [ -d "$_r/lib64/bionic" ]; then
+      mkdir -p /apex/com.android.runtime 2>/dev/null
+      mount -o bind "$_r" /apex/com.android.runtime 2>/dev/null
+      break
+    fi
+  done
+fi
 if [ ! -x /system/bin/linker64 ]; then
   mount -o bind "$SYSROOT" /system 2>/dev/null
 fi
@@ -87,9 +111,12 @@ if [ ! -x /system/bin/linker64 ] && [ -f "$SYSROOT/bin/linker64" ]; then
   cp -f "$SYSROOT/bin/linker64" /system/bin/linker64 2>/dev/null
   chmod 755 /system/bin/linker64 2>/dev/null
 fi
-LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64"
+LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64:/vendor_lib/lib64:/vendor_lib/system/lib64"
 if [ -n "$LD_LIBRARY_PATH" ]; then LD_DIRS="$LD_DIRS:$LD_LIBRARY_PATH"; fi
 if [ ! -x /system/bin/linker64 ]; then ui_print "- WARNING: linker64 not found - kptools may fail"; fi
+# Late fallback: if kptools still cannot run (RC 127), retry after bind-mounting
+# vendor libs into /system/lib64 view.
+KP_NEEDS_VENDOR_FALLBACK=0
 
 kp_run() {
   LD_LIBRARY_PATH="$LD_DIRS" "$KPTOOLS" "$@"
@@ -137,7 +164,7 @@ if [ ! -f "$KPIMG" ]; then abort "kpimg missing"; fi
 
 ui_print "****************************"
 ui_print " FolkPatch Recovery Installer"
-ui_print " v10.3 / KP-0.13.8"
+ui_print " v1.0 / KP-0.13.8"
 ui_print " Universal boot-only patcher"
 ui_print "****************************"
 
@@ -161,11 +188,26 @@ find_block() {
   for p in "/dev/block/by-name/$_b" "/dev/block/bootdevice/by-name/$_b"; do
     if [ -e "$p" ]; then echo "$p"; return 0; fi
   done
-  for _m in /dev/block/platform/*/by-name/"$_b"; do
+  for _m in /dev/block/platform/*/by-name/"$_b" /dev/block/platform/*/*/by-name/"$_b"; do
     if [ -e "$_m" ]; then echo "$_m"; return 0; fi
+  done
+  # mapper/super devices (dynamic partitions): boot is real, but keep generic.
+  for _dm in /dev/block/mapper/"$_b"; do
+    if [ -e "$_dm" ]; then echo "$_dm"; return 0; fi
   done
   _dev=$(find /dev/block -iname "$_b" 2>/dev/null | head -n 1)
   if [ -n "$_dev" ]; then echo "$_dev"; return 0; fi
+  # sysfs uevent fallback (official util_functions.sh rule): match PARTNAME.
+  for _u in /sys/dev/block/*/uevent; do
+    if [ -f "$_u" ]; then
+      _pn=$(grep '^PARTNAME=' "$_u" 2>/dev/null | cut -d= -f2)
+      _dn=$(grep '^DEVNAME=' "$_u" 2>/dev/null | cut -d= -f2)
+      if [ -n "$_pn" ] && [ -n "$_dn" ]; then
+        _pl=$(echo "$_pn" | tr 'A-Z' 'a-z'); _bl=$(echo "$_b" | tr 'A-Z' 'a-z')
+        if [ "$_pl" = "$_bl" ] && [ -e "/dev/block/$_dn" ]; then echo "/dev/block/$_dn"; return 0; fi
+      fi
+    fi
+  done
   return 1
 }
 
@@ -179,7 +221,8 @@ find_part() {
   return 1
 }
 
-# Detect A/B slot from cmdline first (more reliable than getprop in recovery)
+# Detect A/B slot: cmdline -> bootconfig (newer devices) -> getprop ->
+# fstab/mount (active-slot symlinks) -> hidden-A/B probe.
 SLOT=""
 if [ -f /proc/cmdline ]; then
   _cmdline=$(cat /proc/cmdline 2>/dev/null)
@@ -193,6 +236,14 @@ if [ -f /proc/cmdline ]; then
     if [ -n "$_s" ]; then SLOT="_$_s"; fi
   fi
 fi
+if [ -z "$SLOT" ] && [ -f /proc/bootconfig ]; then
+  _bs=$(grep -o 'androidboot\.slot_suffix *= *[^ ]*' /proc/bootconfig 2>/dev/null | head -n 1 | cut -d= -f2 | tr -d ' "')
+  if [ -n "$_bs" ]; then SLOT="$_bs"; fi
+  if [ -z "$SLOT" ]; then
+    _b=$(grep -o 'androidboot\.slot *= *[^ ]*' /proc/bootconfig 2>/dev/null | head -n 1 | cut -d= -f2 | tr -d ' "')
+    if [ -n "$_b" ]; then SLOT="_$_b"; fi
+  fi
+fi
 if [ -z "$SLOT" ] && command -v getprop >/dev/null 2>&1; then
   SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
   if [ -z "$SLOT" ]; then
@@ -202,9 +253,23 @@ if [ -z "$SLOT" ] && command -v getprop >/dev/null 2>&1; then
 fi
 if [ "$SLOT" = "normal" ]; then SLOT=""; fi
 
-# Detect hidden A/B (some recoveries like OrangeFox hide the slot)
+# Detect hidden A/B (some recoveries like OrangeFox hide the slot).
+# Prefer the ACTIVE slot from recovery fstab/mounts; else probe partitions.
 if [ -z "$SLOT" ]; then
-  if find_block "boot_a" >/dev/null 2>&1 || find_block "boot_b" >/dev/null 2>&1; then
+  _act=""
+  for _f in /etc/recovery.fstab /etc/twrp.fstab /etc/fox.fstab /proc/mounts /etc/mtab; do
+    if [ -f "$_f" ]; then
+      _m=$(grep -o '/dev/block/[^ ]*boot_[ab]' "$_f" 2>/dev/null | head -n 1)
+      case "$_m" in
+        *_a) _act="_a"; break ;;
+        *_b) _act="_b"; break ;;
+      esac
+    fi
+  done
+  if [ -n "$_act" ]; then
+    SLOT="$_act"
+    ui_print "- A/B slot from recovery config: $SLOT (both slots will be patched)"
+  elif find_block "boot_a" >/dev/null 2>&1 || find_block "boot_b" >/dev/null 2>&1; then
     SLOT="_a"
     ui_print "- A/B slot hidden by recovery; defaulting to _a (both slots will be patched)"
   fi

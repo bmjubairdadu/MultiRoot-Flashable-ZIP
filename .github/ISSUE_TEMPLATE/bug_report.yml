@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a failed flash or missing root after flashing
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in everything you can — recovery logs make fixes 10x faster.
+        Never attach `boot.img` backups (they may contain personal data).
+  - type: input
+    id: device
+    attributes:
+      label: Device model
+      description: e.g. Xiaomi Mi A2 Lite (daisy)
+      placeholder: Brand + model + codename
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version + ROM
+      description: e.g. Android 11, crDroid / LineageOS / stock
+      placeholder: Android version and ROM name
+    validations:
+      required: true
+  - type: input
+    id: recovery
+    attributes:
+      label: Recovery name + version
+      description: e.g. OrangeFox R11.1, TWRP 3.7
+      placeholder: Recovery and version
+    validations:
+      required: true
+  - type: input
+    id: zip
+    attributes:
+      label: ZIP flashed
+      description: Exact file name from the release
+      placeholder: FolkPatch-v1.0-kp0.13.8-Recovery-Installer.zip
+    validations:
+      required: true
+  - type: textarea
+    id: recovery-log
+    attributes:
+      label: Recovery log lines
+      description: Copy the Target / Flashing / ROOT ACTIVE lines from the recovery log
+      placeholder: |
+        - Target: boot (/dev/block/...)
+        - Flashing ...
+        - ROOT ACTIVE on current slot
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: flash-report
+    attributes:
+      label: FolkPatch-flash-report.txt (if present)
+      description: Paste the contents of /sdcard/FolkPatch-flash-report.txt after flashing
+      render: text
+  - type: textarea
+    id: app-state
+    attributes:
+      label: Manager app state
+      description: What does me.yuki.folk show on the home screen?
+      placeholder: Installed / Not installed / error text + screenshot if possible
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-checks
+      options:
+        - label: I verified the ZIP with SHA256SUMS.txt
+        - label: I flashed the ZIP matching my needs (Installer, not Patcher)
+        - label: I installed the Manager APK bundled in the ZIP (FolkPatch-Manager.apk)
+        - label: I kept a stock boot backup off-device

@@ -41,29 +41,37 @@ OLD_LD_CONFIG="$LD_CONFIG_FILE"
 unset LD_PRELOAD 2>/dev/null
 unset LD_CONFIG_FILE 2>/dev/null
 
-# Mount real system + APEX so kptools can resolve linker64 + bionic
+# Mount real system + APEX so kptools can resolve linker64 + bionic.
+# Universal: slot-aware + vendor fallback + flattened APEX (see InstallFP.sh).
 SYS_OK=0
 if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then
   SYS_OK=1
 else
   mkdir -p /system_root 2>/dev/null
-  for _p in /dev/block/bootdevice/by-name/system_b /dev/block/by-name/system_b \
-             /dev/block/bootdevice/by-name/system /dev/block/by-name/system; do
+  for _p in /dev/block/bootdevice/by-name/system /dev/block/by-name/system \
+             /dev/block/bootdevice/by-name/system_a /dev/block/by-name/system_a \
+             /dev/block/bootdevice/by-name/system_b /dev/block/by-name/system_b \
+             /dev/block/mapper/system; do
     if [ -e "$_p" ]; then
       mount -o ro "$_p" /system_root 2>/dev/null
       if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then SYS_OK=1; break; fi
+      if [ -d /system_root/system ] || [ -d /system_root/bin ]; then SYS_OK=1; break; fi
     fi
   done
 fi
 SYSROOT=""
 if [ -f /system_root/system/build.prop ]; then SYSROOT="/system_root/system"; else SYSROOT="/system_root"; fi
+mkdir -p /vendor_lib 2>/dev/null
+for _v in /dev/block/bootdevice/by-name/vendor /dev/block/by-name/vendor /dev/block/mapper/vendor; do
+  if [ -e "$_v" ]; then mount -o ro "$_v" /vendor_lib 2>/dev/null && break; fi
+done
 mkdir -p /apex 2>/dev/null
 APEX_SRC=""
-for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
   if [ -d "$_a/com.android.runtime" ]; then APEX_SRC="$_a"; break; fi
 done
 if [ -z "$APEX_SRC" ]; then
-  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
     if [ -d "$_a" ]; then APEX_SRC="$_a"; break; fi
   done
 fi
@@ -74,6 +82,16 @@ if [ -n "$APEX_SRC" ]; then
     mount -o bind "$APEX_SRC/com.android.runtime" /apex/com.android.runtime 2>/dev/null
   fi
 fi
+if [ ! -d /apex/com.android.runtime/lib64/bionic ]; then
+  for _r in /system_root/com.android.runtime /system_root/system/com.android.runtime \
+             "$SYSROOT/com.android.runtime" /vendor_lib/com.android.runtime; do
+    if [ -d "$_r/lib64/bionic" ]; then
+      mkdir -p /apex/com.android.runtime 2>/dev/null
+      mount -o bind "$_r" /apex/com.android.runtime 2>/dev/null
+      break
+    fi
+  done
+fi
 if [ ! -x /system/bin/linker64 ]; then
   mount -o bind "$SYSROOT" /system 2>/dev/null
 fi
@@ -83,7 +101,7 @@ if [ ! -x /system/bin/linker64 ] && [ -f "$SYSROOT/bin/linker64" ]; then
   cp -f "$SYSROOT/bin/linker64" /system/bin/linker64 2>/dev/null
   chmod 755 /system/bin/linker64 2>/dev/null
 fi
-LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64"
+LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64:/vendor_lib/lib64:/vendor_lib/system/lib64"
 if [ -n "$LD_LIBRARY_PATH" ]; then LD_DIRS="$LD_DIRS:$LD_LIBRARY_PATH"; fi
 if [ ! -x /system/bin/linker64 ]; then ui_print "- WARNING: linker64 not found - kptools may fail"; fi
 

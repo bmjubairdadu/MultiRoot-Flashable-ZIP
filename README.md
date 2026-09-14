@@ -1,11 +1,30 @@
 # FolkPatch Flashable ZIP
 
-**FolkPatch v10.3 / KernelPatch 0.13.8** — Recovery-flashable root for ARM64 Android devices.
+**Recovery-flashable root (FolkPatch v1.0 / KernelPatch 0.13.8) for ARM64 Android — flash in TWRP/OrangeFox, reboot rooted.**
 
-Supported methods:
-- **Recovery Installer** — flash ZIP and get root immediately on reboot (recommended)
-- **Boot Patcher** — patch a stock boot.img file, flash via fastboot (advanced)
-- **Uninstaller** — restore stock kernel, remove root daemon
+Flash the Installer ZIP in custom recovery and get root immediately on reboot — no PC, no fastboot, no manual patching. Also included: a safe Boot Patcher (patch a stock `boot.img` without touching partitions) and an Uninstaller (restore stock kernel, remove root).
+
+> **Keywords:** FolkPatch recovery flashable zip, FolkPatch TWRP install, KernelPatch root zip, FolkPatch OrangeFox sideload, `me.yuki.folk` manager, APatch alternative root, root without PC, boot.img patcher, KernelPatch 0.13.8.
+
+[![Build ZIPs](https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP/actions/workflows/build.yml/badge.svg)](https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/bmjubairdadu/FolkPatch-Flashable-ZIP)](https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP/releases/latest)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+
+---
+
+## Which file do I need?
+
+| File | Use it when… |
+|---|---|
+| `FolkPatch-v1.0-kp0.13.8-Recovery-Installer.zip` | You want root now: flash in recovery, reboot, done ✅ |
+| `FolkPatch-v1.0-kp0.13.8-Boot-Patcher.zip` | You prefer fastboot: patch a stock `boot.img` on sdcard, flash from PC |
+| `FolkPatch-v1.0-kp0.13.8-Uninstaller.zip` | You want to unroot: restores the stock kernel backup |
+| `SHA256SUMS.txt` | Verify downloads before flashing |
+
+All three ZIPs (plus checksums) are attached to every
+[release](https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP/releases/latest).
+The official Manager APK (`me.yuki.folk`) is bundled **inside** each ZIP —
+always install that copy, never a random APK.
 
 ---
 
@@ -13,71 +32,105 @@ Supported methods:
 
 | Requirement | Notes |
 |---|---|
-| ARM64 Android device | Required |
-| Unlocked bootloader | Required for fastboot method |
-| Custom recovery (TWRP, OrangeFox, etc.) | Required for flashing ZIPs |
-| `CONFIG_KALLSYMS=y` in kernel | Required — if missing, root will NOT work |
+| ARM64 Android device, Android 8.0+ | Required |
+| Custom recovery (TWRP, OrangeFox, …) | Required for flashing ZIPs |
+| `CONFIG_KALLSYMS=y` in the kernel | Required — without it root cannot work |
+| Unlocked bootloader | Only needed for the fastboot method |
 | Battery ≥ 50% | Recommended |
-| Android 8.0+ | Required |
+
+Works on A-only, A/B, and Virtual A/B devices. The kernel always lives in
+the **`boot`** partition — this project never touches `init_boot` or
+`vendor_boot` (flashing those cannot give root and can break booting).
 
 ---
 
-## Files in each release
+## Method 1 — Recovery Installer (recommended, no PC)
 
-| File | Purpose |
-|---|---|
-| `FolkPatch-v10.3-kp0.13.8-Recovery-Installer.zip` | Flash in recovery for instant root |
-| `FolkPatch-v10.3-kp0.13.8-Boot-Patcher.zip` | Patch a stock boot.img (no auto-flash) |
-| `FolkPatch-v10.3-kp0.13.8-Uninstaller.zip` | Restore stock / unroot |
-| `FolkPatch.apk` | Official Manager APK (bundled inside ZIPs too) |
-| `SHA256SUMS.txt` | Checksums for verification |
-
----
-
-## Method 1 — Recovery Installer (recommended)
-
-1. Copy the Installer ZIP to your sdcard.
-2. Boot into recovery → flash `FolkPatch-v10.3-kp0.13.8-Recovery-Installer.zip`.
+1. Copy `FolkPatch-v1.0-kp0.13.8-Recovery-Installer.zip` to sdcard.
+2. Boot into recovery → **Install** → select the ZIP (or `adb sideload` it).
 3. The installer will:
-   - Detect your boot partition automatically
-   - Save a stock backup to sdcard (`FolkPatch-Backup/`)
-   - Patch the kernel with a real superkey
-   - Install the root daemon (`/data/adb/apd`)
+   - Detect your current boot partition and slot automatically
+   - Save a stock backup to `FolkPatch-Backup/` (keep a copy off-device!)
+   - Patch the kernel and install the root daemon (`/data/adb/apd`)
    - Copy the Manager APK to sdcard
-4. Reboot the device.
-5. Install `FolkPatch-Manager.apk` from your sdcard (the official APK bundled in the ZIP — do not use any other APK source).
-6. Open the app — it should show **Installed / Active**. No key entry is required. Allow Superuser on first prompt.
+   - Verify the flashed partition reads back as patched (`ROOT ACTIVE`)
+4. Reboot → install `FolkPatch-Manager.apk` from sdcard.
+5. Open the app → **Installed / Active**. Grant Superuser per app when asked.
 
-> **No root after flashing?** Check the recovery log for `ROOT ACTIVE on current slot`. If not present, the flash did not reach the partition (wrong target or write-protected). Try the Uninstaller, reboot, and flash again.
-
-> **Already have the Manager installed?** Uninstall the old version first, then install the official APK from the ZIP. A different APK signature will cause authentication to fail.
+> **How do I know the flash really worked?** The recovery log must contain
+> `ROOT ACTIVE on current slot`. A copy is also saved to sdcard as
+> `FolkPatch-flash-report.txt` — attach it when asking for help.
 
 ---
 
 ## Method 2 — Boot Patcher + fastboot (advanced)
 
-1. Extract your stock `boot.img` from your firmware package.
-2. Place it on sdcard named `FolkPatch-stock-boot.img`.
-3. Flash `FolkPatch-v10.3-kp0.13.8-Boot-Patcher.zip` in recovery.
-   - This does **not** touch any partition.
-   - Output: `FolkPatch-patched-boot.img` on sdcard, and `FolkPatch-key.txt`.
-4. On your PC:
+1. Get your stock `boot.img` (firmware package or `adb pull /dev/block/by-name/boot`).
+2. Put it on sdcard as `FolkPatch-stock-boot.img`.
+3. Flash `FolkPatch-v1.0-kp0.13.8-Boot-Patcher.zip` in recovery.
+   - Touches **no** partition. Output: `FolkPatch-patched-boot.img` on sdcard.
+4. From PC:
    ```sh
    fastboot flash boot FolkPatch-patched-boot.img
-   # On A/B devices, also flash the other slot:
+   # A/B devices: flash the other slot too
+   fastboot flash boot_a FolkPatch-patched-boot.img
    fastboot flash boot_b FolkPatch-patched-boot.img
+   fastboot reboot
    ```
-5. Reboot → install Manager APK → verify with Root Checker.
+5. Install the Manager APK → verify with a root checker.
 
 ---
 
-## Uninstall / Restore
+## Uninstall / unroot
 
-Flash `FolkPatch-v10.3-kp0.13.8-Uninstaller.zip` in recovery.
+Flash `FolkPatch-v1.0-kp0.13.8-Uninstaller.zip` in recovery. It restores the
+stock backup if found, otherwise live-unpatches the kernel, and always
+removes the root daemon (`/data/adb/apd`, `ap/`, `fp/`).
 
-- If a stock backup exists in `FolkPatch-Backup/`, it is restored automatically.
-- If no backup is found, the installer performs a live kernel unpatch (`kptools -u`).
-- The root daemon (`/data/adb/apd`, `ap/`, `fp/`) is removed from `/data/adb`.
+---
+
+## Troubleshooting (read before opening an issue)
+
+| Symptom | Most likely cause → fix |
+|---|---|
+| No `ROOT ACTIVE` in recovery log | Flash didn't reach the partition (wrong target / write-protected). Flash the Uninstaller, reboot, flash again. |
+| App shows “Not installed” but `apd` runs | Manager APK signature mismatch — uninstall it, install `FolkPatch-Manager.apk` from the ZIP, **reboot**, open the app again. |
+| `kernel requires CONFIG_KALLSYMS=y` | Your kernel can't be patched — root is impossible on this kernel. |
+| `new-boot.img missing` / repack failed | Missing `gzip` in recovery or corrupt download — re-download, verify SHA-256. |
+| Bootloop after flash | Restore: flash the Uninstaller ZIP, or fastboot-flash your stock `boot.img`. |
+| `su: not found` in `adb shell` | Normal — FolkPatch has no `/system/bin/su`. Grant root per app inside the Manager (Superuser page). |
+
+Still stuck? Open a [bug report](.github/ISSUE_TEMPLATE/bug_report.yml) with
+device model, Android version, recovery name/version, the recovery-log lines,
+and `FolkPatch-flash-report.txt`.
+
+---
+
+## FAQ
+
+**Is this official?**
+No — a community repackaging. FolkPatch is by
+[LyraVoid](https://github.com/LyraVoid/FolkPatch), based on KernelPatch by
+[bmax121](https://github.com/bmax121/KernelPatch). Binaries and the manager
+APK come from the official upstream release; only the installer scripts here
+are original work (GPL-3.0). Please star the upstream repo.
+
+**Do I need to enter a superkey?**
+No. The kernel is patched with the default key and the manager authenticates
+by APK signature. There is no key screen — anyone asking for your key is a scam.
+
+**Magisk vs KernelSU vs FolkPatch?**
+Magisk patches the ramdisk (`boot`/`init_boot`); KernelSU needs GKI/LKM builds;
+FolkPatch (KernelPatch-based) patches the `kernel` inside `boot` directly and
+works on kernels 3.18–6.15 with `CONFIG_KALLSYMS=y`, including many older devices.
+
+**Will it trip SafetyNet / Play Integrity?**
+Root inherently affects attestation. Use Shamiko/similar hiding modules and
+check the [FolkPatch docs](https://fp.mysqil.com/) — no guarantees.
+
+**Can I use it with `adb sideload`?**
+Yes — Lineage-style recoveries included. Each ZIP contains exactly one script,
+so sideload (`/sideload/package.zip`) dispatches to the right installer.
 
 ---
 
@@ -85,32 +138,38 @@ Flash `FolkPatch-v10.3-kp0.13.8-Uninstaller.zip` in recovery.
 
 | Component | Role |
 |---|---|
-| `META-INF/.../update-binary` | Magisk-style bootstrap: selects installer script by ZIP filename, bootstraps BusyBox, mounts Android runtime |
-| `scripts/InstallFP.sh` | Reads live boot partition → backs up → unpack → patch with real superkey → repack → flash → install daemon |
-| `scripts/PatchOnly.sh` | Same pipeline on a stock image file; no partition writes |
-| `scripts/UninstallFP.sh` | Restores backup or live-unpatches, removes daemon files |
-| `assets/kpimg` | KernelPatch core image (embedded into the patched kernel) |
-| `lib/arm64-v8a/libkptools.so` | KernelPatch CLI tool for pack/unpack/patch/verify |
-| `lib/arm64-v8a/libbusybox.so` | BusyBox for recovery shell utilities |
+| `META-INF/.../update-binary` | Recovery bootstrap: picks the script by ZIP filename, sets up BusyBox + runtime |
+| `assets/InstallFP.sh` | Live partition → backup → unpack → patch → repack → flash → daemon → verify |
+| `assets/PatchOnly.sh` | Same pipeline on a stock image file; writes nothing to partitions |
+| `assets/UninstallFP.sh` | Restores backup or live-unpatches; removes daemon files |
+| `assets/kpimg` | KernelPatch core image embedded into the patched kernel |
+| `lib/arm64-v8a/libkptools.so` | KernelPatch CLI (unpack/patch/verify/repack) |
+| `lib/arm64-v8a/libbusybox.so` | Unix tools for recovery shell |
 
-**Why system + APEX must be mounted in recovery:**  
-The `kptools` binary links against Android's Bionic libc (`/system/bin/linker64`, `/apex/com.android.runtime/lib64/bionic/`). In recovery these paths are either absent or dangling symlinks because `/apex` is not mounted. The scripts mount the real system partition and APEX before running `kptools`, then restore the environment afterward.
-
-**Superkey:**  
-The kernel is patched with a real `Ap...` superkey (not a zeroed keyless key). The Manager APK uses app-signature authentication — no key entry screen is shown. The key is saved to `FolkPatch-key.txt` on sdcard for reference.
+`kptools` links against Android's Bionic libc, so the scripts mount the real
+system partition and APEX runtime before running it, then restore the
+environment afterward.
 
 ---
 
 ## Build from source
 
-No binaries are committed to this repository. The build script downloads the official FolkPatch APK and constructs the ZIPs:
+No binaries are committed. The build extracts everything from the official APK:
 
 ```sh
-python tools/build.py
-# outputs: dist/FolkPatch-v10.3-kp0.13.8-*.zip + SHA256SUMS.txt
+python tools/build.py --tag v1.0-kp0.13.8
+# outputs: dist/*.zip + SHA256SUMS.txt (all git-ignored)
 ```
 
-Pushing a `v*` tag triggers the GitHub Actions workflow which runs the same build and attaches the ZIPs to the release automatically.
+Pushing a `v*` tag runs the same build in GitHub Actions and attaches the
+ZIPs to the release. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+
+---
+
+## Versioning
+
+`vX.Y-kpA.B.C` — `X.Y` is this installer, `A.B.C` is the embedded KernelPatch.
+Only the latest release is supported ([security policy](SECURITY.md)).
 
 ---
 
@@ -120,7 +179,6 @@ Pushing a `v*` tag triggers the GitHub Actions workflow which runs the same buil
   based on **KernelPatch** by [bmax121](https://github.com/bmax121/KernelPatch).
   Binaries (`kpimg`, `kptools`, `busybox`) and the Manager APK come from the
   official upstream release.
-- Installer scripts (`META-INF/…/update-binary`, `scripts/*.sh`) are original
-  work, licensed **GPL-3.0** (see [LICENSE](LICENSE)) to match the upstream project.
-- This is a community repackaging project, not affiliated with LyraVoid.
-  If you find this useful, please star the [upstream repo](https://github.com/LyraVoid/FolkPatch).
+- Installer scripts (`META-INF/…/update-binary`, `assets/*.sh`) are original
+  work, licensed **GPL-3.0** (see [LICENSE](LICENSE)).
+- Community project, not affiliated with LyraVoid.

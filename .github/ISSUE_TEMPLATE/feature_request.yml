@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an improvement to the installer or repo
+title: "[FEAT] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What device/recovery scenario is not handled today?
+      placeholder: On ... recovery, ... fails because ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How should it work? POSIX-sh constraints apply (no bashisms).
+      placeholder: Detect ... then ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: Applies to all devices (universal), not just mine
+        - label: I tested the idea on a real device

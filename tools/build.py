@@ -86,7 +86,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--apk", default=os.path.join(ROOT, "FolkPatch.apk"))
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
-    ap.add_argument("--version", default="10.1")
+    ap.add_argument("--version", default="1.0")
     ap.add_argument("--kp", default="0.13.8")
     ap.add_argument("--tag", default="",
                     help="Release tag like v5.1-kp0.13.8; drives ZIP names + README.txt")

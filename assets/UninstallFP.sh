@@ -39,29 +39,37 @@ OLD_LD_CONFIG="$LD_CONFIG_FILE"
 unset LD_PRELOAD 2>/dev/null
 unset LD_CONFIG_FILE 2>/dev/null
 
-# Mount real system + APEX so kptools can resolve linker64 + bionic
+# Mount real system + APEX so kptools can resolve linker64 + bionic.
+# Universal: slot-aware + vendor fallback + flattened APEX (see InstallFP.sh).
 SYS_OK=0
 if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then
   SYS_OK=1
 else
   mkdir -p /system_root 2>/dev/null
-  for _p in /dev/block/bootdevice/by-name/system_b /dev/block/by-name/system_b \
-             /dev/block/bootdevice/by-name/system /dev/block/by-name/system; do
+  for _p in /dev/block/bootdevice/by-name/system /dev/block/by-name/system \
+             /dev/block/bootdevice/by-name/system_a /dev/block/by-name/system_a \
+             /dev/block/bootdevice/by-name/system_b /dev/block/by-name/system_b \
+             /dev/block/mapper/system; do
     if [ -e "$_p" ]; then
       mount -o ro "$_p" /system_root 2>/dev/null
       if [ -f /system_root/system/build.prop ] || [ -f /system_root/build.prop ]; then SYS_OK=1; break; fi
+      if [ -d /system_root/system ] || [ -d /system_root/bin ]; then SYS_OK=1; break; fi
     fi
   done
 fi
 SYSROOT=""
 if [ -f /system_root/system/build.prop ]; then SYSROOT="/system_root/system"; else SYSROOT="/system_root"; fi
+mkdir -p /vendor_lib 2>/dev/null
+for _v in /dev/block/bootdevice/by-name/vendor /dev/block/by-name/vendor /dev/block/mapper/vendor; do
+  if [ -e "$_v" ]; then mount -o ro "$_v" /vendor_lib 2>/dev/null && break; fi
+done
 mkdir -p /apex 2>/dev/null
 APEX_SRC=""
-for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
   if [ -d "$_a/com.android.runtime" ]; then APEX_SRC="$_a"; break; fi
 done
 if [ -z "$APEX_SRC" ]; then
-  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex; do
+  for _a in "$SYSROOT/apex" /system_root/apex /system_root/system/apex /apex; do
     if [ -d "$_a" ]; then APEX_SRC="$_a"; break; fi
   done
 fi
@@ -72,6 +80,16 @@ if [ -n "$APEX_SRC" ]; then
     mount -o bind "$APEX_SRC/com.android.runtime" /apex/com.android.runtime 2>/dev/null
   fi
 fi
+if [ ! -d /apex/com.android.runtime/lib64/bionic ]; then
+  for _r in /system_root/com.android.runtime /system_root/system/com.android.runtime \
+             "$SYSROOT/com.android.runtime" /vendor_lib/com.android.runtime; do
+    if [ -d "$_r/lib64/bionic" ]; then
+      mkdir -p /apex/com.android.runtime 2>/dev/null
+      mount -o bind "$_r" /apex/com.android.runtime 2>/dev/null
+      break
+    fi
+  done
+fi
 if [ ! -x /system/bin/linker64 ]; then
   mount -o bind "$SYSROOT" /system 2>/dev/null
 fi
@@ -81,7 +99,7 @@ if [ ! -x /system/bin/linker64 ] && [ -f "$SYSROOT/bin/linker64" ]; then
   cp -f "$SYSROOT/bin/linker64" /system/bin/linker64 2>/dev/null
   chmod 755 /system/bin/linker64 2>/dev/null
 fi
-LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64"
+LD_DIRS="/apex/com.android.runtime/lib64/bionic:/apex/com.android.runtime/lib64:/system/lib64:$SYSROOT/lib64:/system_root/system/lib64:/vendor/lib64:/vendor_lib/lib64:/vendor_lib/system/lib64"
 if [ -n "$LD_LIBRARY_PATH" ]; then LD_DIRS="$LD_DIRS:$LD_LIBRARY_PATH"; fi
 
 kp_run() { LD_LIBRARY_PATH="$LD_DIRS" "$KPTOOLS" "$@"; }
@@ -102,7 +120,7 @@ ui_print "****************************"
 ui_print " FolkPatch Uninstaller"
 ui_print "****************************"
 
-# Detect A/B slot
+# Detect A/B slot: cmdline -> bootconfig -> getprop -> fstab/mounts.
 SLOT=""
 if [ -f /proc/cmdline ]; then
   _cmdline=$(cat /proc/cmdline 2>/dev/null)
@@ -114,6 +132,14 @@ if [ -f /proc/cmdline ]; then
   if [ -z "$SLOT" ]; then
     _s=$(echo "$_cmdline" | tr ' ' '\n' 2>/dev/null | grep '^androidboot.slot=' 2>/dev/null | head -n 1 | cut -d= -f2)
     if [ -n "$_s" ]; then SLOT="_$_s"; fi
+  fi
+fi
+if [ -z "$SLOT" ] && [ -f /proc/bootconfig ]; then
+  _bs=$(grep -o 'androidboot\.slot_suffix *= *[^ ]*' /proc/bootconfig 2>/dev/null | head -n 1 | cut -d= -f2 | tr -d ' "')
+  if [ -n "$_bs" ]; then SLOT="$_bs"; fi
+  if [ -z "$SLOT" ]; then
+    _b=$(grep -o 'androidboot\.slot *= *[^ ]*' /proc/bootconfig 2>/dev/null | head -n 1 | cut -d= -f2 | tr -d ' "')
+    if [ -n "$_b" ]; then SLOT="_$_b"; fi
   fi
 fi
 if [ -z "$SLOT" ] && command -v getprop >/dev/null 2>&1; then
@@ -135,11 +161,24 @@ find_block() {
   for p in "/dev/block/by-name/$_b" "/dev/block/bootdevice/by-name/$_b"; do
     if [ -e "$p" ]; then echo "$p"; return 0; fi
   done
-  for _m in /dev/block/platform/*/by-name/"$_b"; do
+  for _m in /dev/block/platform/*/by-name/"$_b" /dev/block/platform/*/*/by-name/"$_b"; do
     if [ -e "$_m" ]; then echo "$_m"; return 0; fi
+  done
+  for _dm in /dev/block/mapper/"$_b"; do
+    if [ -e "$_dm" ]; then echo "$_dm"; return 0; fi
   done
   _dev=$(find /dev/block -iname "$_b" 2>/dev/null | head -n 1)
   if [ -n "$_dev" ]; then echo "$_dev"; return 0; fi
+  for _u in /sys/dev/block/*/uevent; do
+    if [ -f "$_u" ]; then
+      _pn=$(grep '^PARTNAME=' "$_u" 2>/dev/null | cut -d= -f2)
+      _dn=$(grep '^DEVNAME=' "$_u" 2>/dev/null | cut -d= -f2)
+      if [ -n "$_pn" ] && [ -n "$_dn" ]; then
+        _pl=$(echo "$_pn" | tr 'A-Z' 'a-z'); _bl=$(echo "$_b" | tr 'A-Z' 'a-z')
+        if [ "$_pl" = "$_bl" ] && [ -e "/dev/block/$_dn" ]; then echo "/dev/block/$_dn"; return 0; fi
+      fi
+    fi
+  done
   return 1
 }
 
