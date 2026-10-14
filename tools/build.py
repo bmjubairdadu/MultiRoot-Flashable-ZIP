@@ -204,6 +204,7 @@ if __name__ == "__main__":
     ]
     if bb32:
         common.append(("lib/armeabi-v7a/libbusybox.so", bb32, 0o755))
+        common.append(("busybox32", bb32, 0o755))
 
     inst_entries = list(common) + [
         ("assets/kpimg", kpimg, 0o755),

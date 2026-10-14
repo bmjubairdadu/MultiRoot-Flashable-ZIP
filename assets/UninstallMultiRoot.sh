@@ -13,8 +13,8 @@
 # No bashisms: no 'function', no '[[', no '=='.
 # Env from update-binary: BBBIN, INSTALLER, ARCH. Args: $1 api, $2 fd, $3 zip.
 # =====================================================================
-OUTFD="$2"
-ZIPFILE="$3"
+if [ -n "$2" ]; then OUTFD="$2"; fi
+if [ -n "$3" ]; then ZIPFILE="$3"; fi
 BB="$BBBIN"
 if [ -z "$BB" ]; then BB="busybox"; fi
 WORK="$INSTALLER"

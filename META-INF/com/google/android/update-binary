@@ -64,6 +64,17 @@ if [ -f "$TMPDIR/busybox" ]; then
 fi
 
 if [ ! -x "$BBBIN" ]; then
+  unzip -o "$ZIPFILE" "busybox32" -d "$TMPDIR" >> "$DBG" 2>&1
+  if [ -f "$TMPDIR/busybox32" ]; then
+    chmod 755 "$TMPDIR/busybox32" 2>/dev/null
+    if "$TMPDIR/busybox32" true >> "$DBG" 2>&1; then
+      mv -f "$TMPDIR/busybox32" "$BBBIN" 2>/dev/null
+      ARCH="armeabi-v7a"
+    fi
+  fi
+fi
+
+if [ ! -x "$BBBIN" ]; then
   for a in "arm64-v8a" "armeabi-v7a" "x86_64" "x86"; do
     unzip -o "$ZIPFILE" "lib/$a/libbusybox.so" -d "$TMPDIR" >> "$DBG" 2>&1
     libpath="$TMPDIR/lib/$a/libbusybox.so"
@@ -90,14 +101,46 @@ export BBBIN
 export INSTALLER
 export ARCH
 export ASH_STANDALONE=1
+export OUTFD
+export ZIPFILE
 
 raw_print "- Extracting payload ..."
 mkdir -p "$INSTALLER" 2>/dev/null
-unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
-URC=$?
-if [ -n "$BBBIN" ] && [ ! -f "$INSTALLER/README.txt" ]; then
-  rm -rf "$INSTALLER" 2>/dev/null; mkdir -p "$INSTALLER" 2>/dev/null
-  "$BBBIN" unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
+
+# 1. Primary: use verified busybox unzip which supports glob patterns reliably
+if [ -n "$BBBIN" ] && [ -x "$BBBIN" ]; then
+  "$BBBIN" unzip -o "$ZIPFILE" "assets/*" "lib/*" -d "$INSTALLER" >>"$DBG" 2>&1
+fi
+
+# 2. Fallback 1: try recovery built-in unzip with pattern if scripts are not extracted
+if [ ! -f "$INSTALLER/assets/InstallMultiRoot.sh" ] && [ ! -f "$INSTALLER/assets/UninstallMultiRoot.sh" ]; then
+  unzip -o "$ZIPFILE" "assets/*" "lib/*" -d "$INSTALLER" >>"$DBG" 2>&1
+fi
+
+# 3. Fallback 2: full archive extraction (works across all recoveries regardless of glob support)
+if [ ! -f "$INSTALLER/assets/InstallMultiRoot.sh" ] && [ ! -f "$INSTALLER/assets/UninstallMultiRoot.sh" ]; then
+  raw_print "- Retrying payload extraction ..."
+  rm -rf "$INSTALLER" 2>/dev/null
+  mkdir -p "$INSTALLER" 2>/dev/null
+  if [ -n "$BBBIN" ] && [ -x "$BBBIN" ]; then
+    "$BBBIN" unzip -o "$ZIPFILE" -d "$INSTALLER" >>"$DBG" 2>&1
+  else
+    unzip -o "$ZIPFILE" -d "$INSTALLER" >>"$DBG" 2>&1
+  fi
+  # Reclaim RAM: Manager APKs are streamed directly from $ZIPFILE by installer
+  rm -f "$INSTALLER"/*.apk 2>/dev/null
+fi
+
+# 4. Fallback 3: check if archive was zipped with a parent folder
+if [ ! -f "$INSTALLER/assets/InstallMultiRoot.sh" ] && [ ! -f "$INSTALLER/assets/UninstallMultiRoot.sh" ]; then
+  _nested=$(find "$INSTALLER" -type f \( -name "InstallMultiRoot.sh" -o -name "UninstallMultiRoot.sh" \) 2>/dev/null | head -n 1)
+  if [ -n "$_nested" ] && [ -f "$_nested" ]; then
+    _nested_assets=$(dirname "$_nested")
+    if [ "$_nested_assets" != "$INSTALLER/assets" ]; then
+      mkdir -p "$INSTALLER/assets" 2>/dev/null
+      cp -rf "$_nested_assets"/* "$INSTALLER/assets/" 2>/dev/null
+    fi
+  fi
 fi
 
 chmod -R 755 "$INSTALLER/assets" "$INSTALLER/lib" 2>/dev/null
@@ -122,6 +165,9 @@ fi
 
 if [ -z "$SCRIPT" ]; then
   raw_print "- ERROR: Installer script missing!"
+  raw_print "- Debug: listing $INSTALLER:"
+  ls -la "$INSTALLER" >> "$DBG" 2>&1
+  [ -d "$INSTALLER/assets" ] && ls -la "$INSTALLER/assets" >> "$DBG" 2>&1
   exit 1
 fi
 

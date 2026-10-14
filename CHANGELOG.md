@@ -7,6 +7,7 @@ Magisk 30.6).
 ## [v2.1] — 2026-10-14 — Fix Updater Process Error & Universal Root
 
 ### Fixed
+- 🐛 **Fixed "ERROR: Installer script missing!"**: Recovery's built-in toybox `unzip` does not match wildcards like `assets/*`. The bootstrap script previously checked `README.txt` before retrying with Busybox; since `README.txt` had no wildcards, toybox extracted only `README.txt` while omitting `assets/`, causing the retry to be skipped. Fixed by extracting directly with verified Busybox first, with a multi-fallback sequence (including full non-wildcard extraction) guaranteed across all recoveries.
 - 🐛 **Fixed "Updater process ended with ERROR: 1"**: Fixed missing `run_magisk` function definition in `InstallMultiRoot.sh` and `UninstallMultiRoot.sh` (was previously declared as `magisk_run`, causing shell exit code 127 on boot unpack).
 - 🐛 **Fixed early slot detection**: Moved `SLOT` detection before `system_root` and `vendor` partition mounting so slot-specific partitions (`system_b`, `vendor_b`) mount correctly in recovery.
 - 🐛 **Fixed dynamic linker fallback**: Prevented bind-mounting an empty directory over `/system` when recovery system mounting fails, preserving recovery environment integrity.
