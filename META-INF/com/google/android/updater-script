@@ -1,5 +1,5 @@
-# APatch updater script
-# This ZIP uses Magisk-style update-binary; updater-script is kept minimal.
+# APatch/KernelPatch updater script
+# This ZIP uses a Magisk-style update-binary; the updater-script is minimal.
 # The real installation logic is in META-INF/com/google/android/update-binary
-# which selects InstallFP.sh / PatchOnly.sh / UninstallFP.sh by ZIP filename.
-
+# which selects InstallMultiRoot.sh (default) or UninstallMultiRoot.sh
+# (*uninstall* ZIPs) by ZIP filename.

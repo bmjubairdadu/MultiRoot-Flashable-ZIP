@@ -17,10 +17,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Fetch official FolkPatch APK
+      - name: Fetch official APKs (FolkPatch + APatch + Magisk)
         run: |
           curl -sL -o FolkPatch.apk https://github.com/LyraVoid/FolkPatch/releases/download/kp0.13.8/FolkPatch_115032_5.0_on_main-release.apk
-          sha256sum FolkPatch.apk
+          curl -sL -o APatch.apk https://github.com/bmax121/APatch/releases/download/11224/APatch_11224_9a63e0f_HEAD-release-signed.apk
+          curl -sL -o Magisk-v30.6.apk https://github.com/topjohnwu/Magisk/releases/download/v30.6/Magisk-v30.6.apk
+          sha256sum FolkPatch.apk APatch.apk Magisk-v30.6.apk
       - name: Build flashable ZIPs
         run: |
           if [ -n "${{ github.ref_name }}" ]; then

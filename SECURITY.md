@@ -26,7 +26,7 @@ the APK SHA-256 so you can verify what you flash.
 ## Reporting a vulnerability
 
 **Do not open a public issue for security problems.** Instead, open a
-[private security advisory](https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP/security/advisories/new)
+[private security advisory](https://github.com/bmjubairdadu/MultiRoot-Flashable-ZIP/security/advisories/new)
 or contact the repository owner directly.
 
 Please include: affected version/tag, device + recovery details, steps to

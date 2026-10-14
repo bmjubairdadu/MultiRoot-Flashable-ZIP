@@ -1,5 +1,8 @@
 # local build inputs / outputs (binaries are NOT committed)
 FolkPatch.apk
+APatch.apk
+Magisk-v30.6.apk
+magisk_extract/
 dist/
 *.zip
 !docs/

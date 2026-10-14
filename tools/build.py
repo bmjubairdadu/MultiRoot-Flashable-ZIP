@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
-"""Build Magisk-style FolkPatch recovery ZIPs from the official APK.
+"""Build MultiRoot recovery ZIPs: KernelPatch root + Magisk root, zero backups.
 
-Downloads nothing by default: uses FolkPatch.apk placed next to this repo
-(see APK_URL below), extracts busybox/kptools/kpimg, packs 3 ZIPs + SHA256SUMS.
+One installer ZIP patches the boot kernel with KernelPatch 0.13.8 (so the
+FolkPatch and APatch manager apps can both manage root) and optionally the
+ramdisk with Magisk 30.6 (so the Magisk app manages root too). One
+uninstaller ZIP reverses everything live - no backup file is ever created,
+used, or kept.
+
+No binaries are committed. The build reads everything from three OFFICIAL
+APKs placed next to this repo (missing ones are downloaded from their
+official GitHub releases and SHA-256 verified):
+
+  FolkPatch.apk    - LyraVoid/FolkPatch   (busybox, kptools, kpimg, daemons)
+  APatch.apk       - bmax121/APatch       (manager APK for sdcard)
+  Magisk-v30.6.apk - topjohnwu/Magisk     (magiskboot, magiskinit, payload)
 
 Usage:
-    python tools/build.py [--apk PATH] [--out dist] [--version 1.0] [--kp 0.13.8]
-    python tools/build.py --tag v1.0-kp0.13.8   # tag drives ZIP filenames
+    python tools/build.py [--out dist] [--tag v2.0]
 """
 import argparse
 import hashlib
 import os
-import re
 import sys
 import urllib.request
 import zipfile
 
-APK_URL = "https://github.com/LyraVoid/FolkPatch/releases/download/kp0.13.8/FolkPatch_115032_5.0_on_main-release.apk"
-APK_SHA256 = "0b1671fe42a565a4fb8a573ac9b480febe11189380f96c83ccbe29fdfd375890"
+FOLKPATCH_URL = "https://github.com/LyraVoid/FolkPatch/releases/download/kp0.13.8/FolkPatch_115032_5.0_on_main-release.apk"
+FOLKPATCH_SHA256 = "0b1671fe42a565a4fb8a573ac9b480febe11189380f96c83ccbe29fdfd375890"
+APATCH_URL = "https://github.com/bmax121/APatch/releases/download/11224/APatch_11224_9a63e0f_HEAD-release-signed.apk"
+APATCH_SHA256 = "f1986f9a9c3b2b2d5ca09aa6b9ef24226fef662f8faf5677ce1447ffcae68590"
+MAGISK_URL = "https://github.com/topjohnwu/Magisk/releases/download/v30.6/Magisk-v30.6.apk"
+MAGISK_SHA256 = "f1ffc3c9a5614c251ba6bada308163acc3c3d844cf01d33f55a8bc151adc34ce"
+
+MAGISK_VER = "30.6"
+KP_VER = "0.13.8"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -35,6 +51,26 @@ def sha256_file(path):
     return h.hexdigest()
 
 
+def fetch(url, path, expected_sha):
+    """Use the local APK if its SHA-256 matches; otherwise download + verify."""
+    name = os.path.basename(path)
+    if os.path.exists(path):
+        digest = sha256_file(path)
+        if digest == expected_sha:
+            print("OK  %s (local, sha256 verified)" % name)
+            return path
+        print("!!  %s hash mismatch - re-downloading official release" % name)
+        os.remove(path)
+    print("...  downloading %s" % url)
+    urllib.request.urlretrieve(url, path)
+    digest = sha256_file(path)
+    if digest != expected_sha:
+        print("FATAL: %s sha256 mismatch:\n  got      %s\n  expected %s" % (name, digest, expected_sha))
+        sys.exit(1)
+    print("OK  %s (downloaded, sha256 verified)" % name)
+    return path
+
+
 def w(z, name, data, mode=0o644):
     zi = zipfile.ZipInfo(name)
     zi.external_attr = (mode & 0xFFFF) << 16
@@ -42,135 +78,150 @@ def w(z, name, data, mode=0o644):
     z.writestr(zi, data)
 
 
-def build(outname, script_name, script_data, ub, us, rd, bb, kt, kp, apk, extra=None):
+def build(outname, entries, rd):
     out = os.path.join(args.out, outname)
     z = zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9)
-    zi = zipfile.ZipInfo("META-INF/com/google/android/update-binary")
-    zi.external_attr = (0o755 & 0xFFFF) << 16
-    zi.compress_type = zipfile.ZIP_DEFLATED
-    z.writestr(zi, ub)
-    zi2 = zipfile.ZipInfo("META-INF/com/google/android/updater-script")
-    zi2.external_attr = (0o644 & 0xFFFF) << 16
-    zi2.compress_type = zipfile.ZIP_DEFLATED
-    z.writestr(zi2, us)
-    w(z, "busybox", bb, 0o755)
-    w(z, "lib/arm64-v8a/libbusybox.so", bb, 0o755)
-    w(z, "lib/arm64-v8a/libkptools.so", kt, 0o755)
-    for name, data in (extra or []):
-        w(z, name, data, 0o755)
-    w(z, "assets/" + script_name, script_data, 0o755)
-    # Also include assets folder contents (apd, fpd, resetprop, kpimg).
-    # CRITICAL: pack ONLY the selected installer script. Packing all *.sh
-    # files breaks ADB sideload: recovery renames the ZIP to
-    # /sideload/package.zip, so update-binary cannot pick a script by ZIP
-    # filename and always falls back to InstallFP.sh (wrong ZIP = no root /
-    # wrong action). One script per ZIP keeps sideload working.
-    assets_dir = os.path.join(ROOT, "assets")
-    if os.path.isdir(assets_dir):
-        for root, dirs, files in os.walk(assets_dir):
-            for fname in files:
-                if fname.endswith(".sh"):
-                    continue  # selected script already added above; skip others
-                fpath = os.path.join(root, fname)
-                arcname = os.path.relpath(fpath, ROOT)
-                with open(fpath, "rb") as f:
-                    w(z, arcname, f.read(), 0o755)
-    w(z, "FolkPatch.apk", apk, 0o644)
-    w(z, "README.txt", rd, 0o644)
+    seen = set()
+    for name, data, mode in entries:
+        if name in seen:
+            print("FATAL: duplicate zip entry %s" % name)
+            sys.exit(1)
+        seen.add(name)
+        w(z, name, data, mode)
+    w(z, "README.txt", rd.encode("utf-8"), 0o644)
     z.close()
-    print(outname, os.path.getsize(out))
+    print("->  %s (%d bytes)" % (outname, os.path.getsize(out)))
     return out
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--apk", default=os.path.join(ROOT, "FolkPatch.apk"))
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
-    ap.add_argument("--version", default="1.0")
-    ap.add_argument("--kp", default="0.13.8")
-    ap.add_argument("--tag", default="",
-                    help="Release tag like v1.0-kp0.13.8; drives ZIP names + README.txt")
+    ap.add_argument("--tag", default="v2.0", help="ZIP filename tag, e.g. v2.0")
     args = ap.parse_args()
+    print("Building MultiRoot %s (KP %s + Magisk %s)" % (args.tag, KP_VER, MAGISK_VER))
 
-    if args.tag:
-        m = re.match(r"^v(.+?)-[kK][pP](.+)$", args.tag.strip())
-        if m:
-            args.version, args.kp = m.group(1), m.group(2)
-            print("Tag %s -> version=%s kp=%s" % (args.tag, args.version, args.kp))
-        else:
-            print("WARNING: --tag %s not like v<ver>-kp<kp>, using --version/--kp" % args.tag)
-        tag = args.tag.lstrip("v")
-        tag = "v" + tag
-    else:
-        tag = "v%s-KP%s" % (args.version, args.kp)
-    print("Building: %s" % tag)
+    folk_path = fetch(FOLKPATCH_URL, os.path.join(ROOT, "FolkPatch.apk"), FOLKPATCH_SHA256)
+    apatch_path = fetch(APATCH_URL, os.path.join(ROOT, "APatch.apk"), APATCH_SHA256)
+    magisk_path = fetch(MAGISK_URL, os.path.join(ROOT, "Magisk-v30.6.apk"), MAGISK_SHA256)
 
-    apk_path = args.apk
-    if not os.path.exists(apk_path):
-        print("APK not found at %s, downloading official release..." % apk_path)
-        print("URL: %s" % APK_URL)
-        urllib.request.urlretrieve(APK_URL, apk_path)
-    digest = sha256_file(apk_path)
-    if digest != APK_SHA256:
-        print("WARNING: APK sha256 mismatch:\n  got      %s\n  expected %s" % (digest, APK_SHA256))
-        print("Continuing anyway (upstream may have re-uploaded).")
-    else:
-        print("APK sha256 OK")
-
-    ub = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "update-binary"))
-    us = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "updater-script"))
-    inst = lf(os.path.join(ROOT, "assets", "InstallFP.sh"))
-    patch = lf(os.path.join(ROOT, "assets", "PatchOnly.sh"))
-    un = lf(os.path.join(ROOT, "assets", "UninstallFP.sh"))
-
-    rd_lines = [
-        "FolkPatch v%s (KP-%s) - Magisk-style Recovery ZIPs" % (args.version, args.kp),
-        "See https://github.com/bmjubairdadu/FolkPatch-Flashable-ZIP for guide.",
-        "1) *-Recovery-Installer.zip = direct flash boot from recovery.",
-        "2) *-Boot-Patcher.zip = patch stock img on sdcard (safe, no auto-flash).",
-        "3) *-Uninstaller.zip = restore stock backup or live-unpatch.",
-        "Needs ARM64 + CONFIG_KALLSYMS=y. Keep stock backup. GPL-3.0.",
-    ]
-    rd = ("\n".join(rd_lines) + "\n").encode()
-
-    za = zipfile.ZipFile(apk_path)
-    bb = za.read("lib/arm64-v8a/libbusybox.so")
-    kt = za.read("lib/arm64-v8a/libkptools.so")
-    kp = za.read("assets/kpimg")
-    # Instant-root daemon files (app rule): libapd.so -> /data/adb/apd,
-    # Service/fpd -> /data/adb/fp/bin/fpd, resetprop -> /data/adb/ap/bin/.
+    # --- payloads from the official FolkPatch APK (KernelPatch side) ---
+    zf = zipfile.ZipFile(folk_path)
+    bb = zf.read("lib/arm64-v8a/libbusybox.so")
+    kt = zf.read("lib/arm64-v8a/libkptools.so")
+    kpimg = zf.read("assets/kpimg")
     try:
-        apd = za.read("lib/arm64-v8a/libapd.so")
+        apd = zf.read("lib/arm64-v8a/libapd.so")
     except KeyError:
         apd = b""
     try:
-        fpd = za.read("assets/Service/fpd")
+        fpd = zf.read("assets/Service/fpd")
     except KeyError:
         fpd = b""
     try:
-        rp = za.read("lib/arm64-v8a/libresetprop.so")
+        rp = zf.read("lib/arm64-v8a/libresetprop.so")
     except KeyError:
         rp = b""
-    za.close()
-    extra = []
-    if apd:
-        extra.append(("assets/apd", apd))
-    if fpd:
-        extra.append(("assets/fpd", fpd))
-    if rp:
-        extra.append(("assets/resetprop", rp))
+    zf.close()
     if not apd:
-        print("WARNING: libapd.so missing in APK - instant-root daemon unavailable")
-    with open(apk_path, "rb") as f:
-        apk = f.read()
+        print("WARNING: libapd.so missing in FolkPatch APK - instant-root daemon unavailable")
+    with open(folk_path, "rb") as f:
+        folk_apk = f.read()
+    with open(apatch_path, "rb") as f:
+        apatch_apk = f.read()
+
+    # --- payloads from the official Magisk APK (ramdisk side) ---
+    zm = zipfile.ZipFile(magisk_path)
+    magiskboot = zm.read("lib/arm64-v8a/libmagiskboot.so")
+    magiskinit = zm.read("lib/arm64-v8a/libmagiskinit.so")
+    magiskbin = zm.read("lib/arm64-v8a/libmagisk.so")
+    init_ld = zm.read("lib/arm64-v8a/libinit-ld.so")
+    stub_apk = zm.read("assets/stub.apk")
+    zm.close()
+
+    ub = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "update-binary"))
+    us = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "updater-script"))
+    inst = lf(os.path.join(ROOT, "assets", "InstallMultiRoot.sh"))
+    un = lf(os.path.join(ROOT, "assets", "UninstallMultiRoot.sh"))
+
+    rd_inst = (
+        "MultiRoot v2.0 - Recovery Installer (KernelPatch %s + Magisk %s)\n" % (KP_VER, MAGISK_VER) +
+        "======================================================================\n"
+        "Ekta flashable, jekono root manager:\n"
+        "  - FolkPatch Manager  (flash sesh e sdcard e FolkPatch-Manager.apk)\n"
+        "  - APatch Manager     (sdcard e APatch-Manager.apk)\n"
+        "  - Magisk app         (GitHub/Play theke install koro)\n"
+        "Flash korar por je kono ekta manager app install korlei oita root\n"
+        "manage korbe. Manager APK gulo sdcard e copy kora thake.\n"
+        "\n"
+        "Kivabe flash korbe:\n"
+        "  1. Ei ZIP sdcard e copy koro\n"
+        "  2. Custom recovery (TWRP/OrangeFox) -> Install -> ZIP select\n"
+        "  3. Reboot -> je kono manager app install koro -> Installed/Active\n"
+        "\n"
+        "Mode change (optional): sdcard e 'root-mode.txt' banao, first line:\n"
+        "  all    = KernelPatch + Magisk (default)\n"
+        "  kpatch = shudhu KernelPatch (FolkPatch/APatch manager)\n"
+        "  magisk = shudhu Magisk (Magisk manager)\n"
+        "Tarpor ei ZIP abar flash koro.\n"
+        "\n"
+        "Requirements: ARM64 + CONFIG_KALLSYMS=y kernel + unlocked bootloader.\n"
+        "NO backup file toiri hoy na - direct flash. Uninstaller ZIP diye\n"
+        "jekono somoy unroot kora jabe (backup charai).\n"
+        "NOTE: KernelSU manager (KSU/Next/SukiSU) ei ZIP er sathe kaj kore na\n"
+        "(tar KMI-specific kernel/LKM alada lage).\n"
+        "Bootloop hole MultiRoot Uninstaller ZIP flash koro.\n"
+    )
+
+    rd_un = (
+        "MultiRoot v2.0 - Uninstaller\n"
+        "============================\n"
+        "KernelPatch + Magisk + sob root file remove kore stock boot ferot\n"
+        "anbe. Kono backup file lagbe na (live kernel unpatch + Magisk-er\n"
+        "in-image ramdisk restore). Manager app gulo Android settings theke\n"
+        "nijei uninstall koro.\n"
+        "\n"
+        "Flash: Recovery -> Install -> ei ZIP -> reboot.\n"
+    )
+
+    common = [
+        ("META-INF/com/google/android/update-binary", ub, 0o755),
+        ("META-INF/com/google/android/updater-script", us, 0o644),
+        ("busybox", bb, 0o755),
+        ("lib/arm64-v8a/libbusybox.so", bb, 0o755),
+        ("lib/arm64-v8a/libkptools.so", kt, 0o755),
+    ]
+
+    inst_entries = list(common) + [
+        ("assets/kpimg", kpimg, 0o755),
+        ("assets/InstallMultiRoot.sh", inst, 0o755),
+        ("assets/magisk/magiskboot", magiskboot, 0o755),
+        ("assets/magisk/magiskinit", magiskinit, 0o644),
+        ("assets/magisk/magisk", magiskbin, 0o755),
+        ("assets/magisk/init-ld", init_ld, 0o644),
+        ("assets/magisk/stub.apk", stub_apk, 0o644),
+        ("FolkPatch.apk", folk_apk, 0o644),
+        ("APatch.apk", apatch_apk, 0o644),
+    ]
+    if apd:
+        inst_entries.append(("assets/apd", apd, 0o755))
+    if fpd:
+        inst_entries.append(("assets/fpd", fpd, 0o755))
+    if rp:
+        inst_entries.append(("assets/resetprop", rp, 0o755))
+
+    un_entries = list(common) + [
+        ("assets/UninstallMultiRoot.sh", un, 0o755),
+        ("assets/magisk/magiskboot", magiskboot, 0o755),
+    ]
 
     os.makedirs(args.out, exist_ok=True)
     outs = []
-    outs.append(build("FolkPatch-%s-Recovery-Installer.zip" % tag, "InstallFP.sh", inst, ub, us, rd, bb, kt, kp, apk, extra))
-    outs.append(build("FolkPatch-%s-Boot-Patcher.zip" % tag, "PatchOnly.sh", patch, ub, us, rd, bb, kt, kp, apk, extra))
-    outs.append(build("FolkPatch-%s-Uninstaller.zip" % tag, "UninstallFP.sh", un, ub, us, rd, bb, kt, kp, apk))
+    outs.append(build("MultiRoot-%s-Recovery-Installer.zip" % args.tag, inst_entries, rd_inst))
+    outs.append(build("MultiRoot-%s-Uninstaller.zip" % args.tag, un_entries, rd_un))
 
-    with open(os.path.join(args.out, "SHA256SUMS.txt"), "w") as f:
+    sums = os.path.join(args.out, "SHA256SUMS.txt")
+    with open(sums, "w", newline="\n") as f:
         for o in outs:
             f.write("%s  %s\n" % (sha256_file(o), os.path.basename(o)))
-    print("DONE ->", args.out)
+    print("DONE -> %s" % args.out)

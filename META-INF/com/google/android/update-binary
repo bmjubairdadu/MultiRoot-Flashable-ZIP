@@ -1,18 +1,19 @@
 #!/sbin/sh
-# FolkPatch Magisk-style recovery bootstrap (POSIX sh, no bashisms)
+# MultiRoot Magisk-style recovery bootstrap (POSIX sh, no bashisms)
 # Args from recovery: $1 api-version, $2 fd, $3 zipfile
-# Debug mode: log to /tmp/fp_debug.log so the user can send last lines.
+# Picks InstallMultiRoot.sh (default) or UninstallMultiRoot.sh (*uninstall*).
+# Debug mode: log to /tmp/multiroot_debug.log so the user can send last lines.
 OUTFD="$2"
 ZIPFILE="$3"
 TMPDIR="/dev/tmp"
 BBBIN="$TMPDIR/busybox"
-INSTALLER="$TMPDIR/fp_install"
+INSTALLER="$TMPDIR/multiroot"
 
 DBG=""
 for d in /tmp /dev/tmp /cache/recovery /data/local/tmp; do
-  if [ -d "$d" ] || mkdir -p "$d" 2>/dev/null; then DBG="$d/fp_debug.log"; break; fi
+  if [ -d "$d" ] || mkdir -p "$d" 2>/dev/null; then DBG="$d/multiroot_debug.log"; break; fi
 done
-if [ -z "$DBG" ]; then DBG="/tmp/fp_debug.log"; fi
+if [ -z "$DBG" ]; then DBG="/tmp/multiroot_debug.log"; fi
 
 raw_print() {
   echo "$1" >> "$DBG" 2>/dev/null
@@ -24,8 +25,8 @@ raw_print() {
 }
 
 raw_print "****************************"
-raw_print " FolkPatch Recovery Installer"
-raw_print " v1.0 (KP-0.13.8)"
+raw_print " MultiRoot Recovery ZIP"
+raw_print " v2.0 (KP-0.13.8 + Magisk-30.6)"
 raw_print " OUTFD=$OUTFD ZIP=$ZIPFILE"
 raw_print " DBG=$DBG"
 raw_print "****************************"
@@ -36,7 +37,7 @@ for d in /tmp /dev/tmp /cache/recovery /data/local/tmp; do
   if mkdir -p "$d" 2>/dev/null && [ -d "$d" ]; then TMPDIR="$d"; break; fi
 done
 if [ -z "$TMPDIR" ]; then TMPDIR="/tmp"; mkdir -p "$TMPDIR" 2>/dev/null; fi
-if [ -z "$DBG" ] || [ ! -d "$(dirname "$DBG" 2>/dev/null)" ]; then DBG="$TMPDIR/fp_debug.log"; fi
+if [ -z "$DBG" ] || [ ! -d "$(dirname "$DBG" 2>/dev/null)" ]; then DBG="$TMPDIR/multiroot_debug.log"; fi
 : > "$DBG" 2>/dev/null
 raw_print "- TMPDIR=$TMPDIR"
 raw_print "- args: 1=$1 2=$2 3=$3 0=$0"
@@ -44,7 +45,7 @@ ls -ld "$ZIPFILE" >> "$DBG" 2>&1
 raw_print "- ls ZIP rc=$?"
 
 BBBIN="$TMPDIR/busybox"
-INSTALLER="$TMPDIR/fp_install"
+INSTALLER="$TMPDIR/multiroot"
 rm -rf "$INSTALLER" 2>/dev/null
 if [ -f "$BBBIN" ]; then : > "$BBBIN" 2>/dev/null; rm -f "$BBBIN" 2>/dev/null; fi
 mkdir -p "$INSTALLER" 2>/dev/null
@@ -57,9 +58,8 @@ if [ ! -f "$ZIPFILE" ]; then
   exit 1
 fi
 
-# Busybox bootstrap via recovery's own busybox/unzip.
+# Busybox bootstrap via recovery's own unzip.
 raw_print "- extracting busybox ..."
-# Try built-in unzip first.
 unzip -o "$ZIPFILE" "busybox" -d "$TMPDIR" >> "$DBG" 2>&1
 raw_print "- unzip busybox rc=$?"
 if [ -f "$TMPDIR/busybox" ]; then
@@ -92,42 +92,41 @@ export ASH_STANDALONE=1
 
 raw_print "- extracting payload ..."
 mkdir -p "$INSTALLER" 2>/dev/null
-# Try recovery unzip; fall back to busybox unzip if present.
-unzip -o "$ZIPFILE" "assets/*" "lib/*" "META-INF/com/google/*" "FolkPatch.apk" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
+# Only the payload is extracted - the Manager APKs stay inside the ZIP and
+# are streamed to sdcard later by the installer (keeps tmpfs usage low).
+unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
 URC=$?
 raw_print "- unzip payload rc=$URC"
-if [ -n "$BBBIN" ] && [ ! -f "$INSTALLER/assets/kpimg" ]; then
+if [ -n "$BBBIN" ] && [ ! -f "$INSTALLER/README.txt" ]; then
   raw_print "- retry with busybox unzip"
   rm -rf "$INSTALLER" 2>/dev/null; mkdir -p "$INSTALLER" 2>/dev/null
-  "$BBBIN" unzip -o "$ZIPFILE" "assets/*" "lib/*" "META-INF/com/google/*" "FolkPatch.apk" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
+  "$BBBIN" unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
   raw_print "- bb unzip rc=$?"
 fi
 
 ls -R "$INSTALLER" 2>&1 | head -n 120 >> "$DBG" 2>&1
 chmod 755 "$INSTALLER/assets/"*.sh 2>/dev/null
 chmod 755 "$INSTALLER/lib/arm64-v8a/"*.so "$INSTALLER/assets/kpimg" 2>/dev/null
+chmod 755 "$INSTALLER/assets/magisk/"* 2>/dev/null
 for f in "$INSTALLER/assets/"*.sh "$INSTALLER/lib/arm64-v8a/"*.so "$INSTALLER/assets/kpimg"; do
   ls -l "$f" >> "$DBG" 2>&1
 done
 
-# Pick the installer by ZIP name when possible, else use whichever
+# Pick the installer by ZIP name when possible, else default to install.
 SCRIPT=""
 LOWER=""
 LOWER=$(echo "$ZIPFILE" | tr 'A-Z' 'a-z' 2>/dev/null)
 raw_print "- lower ZIP: $LOWER"
 case "$LOWER" in
-  *uninstall*)
-    if [ -f "$INSTALLER/assets/UninstallFP.sh" ]; then SCRIPT="$INSTALLER/assets/UninstallFP.sh"; fi
-    ;;
-  *patcher*|*patch-only*|*patch_only*)
-    if [ -f "$INSTALLER/assets/PatchOnly.sh" ]; then SCRIPT="$INSTALLER/assets/PatchOnly.sh"; fi
+  *uninstall*|*remove*)
+    if [ -f "$INSTALLER/assets/UninstallMultiRoot.sh" ]; then SCRIPT="$INSTALLER/assets/UninstallMultiRoot.sh"; fi
     ;;
   *)
-    if [ -f "$INSTALLER/assets/InstallFP.sh" ]; then SCRIPT="$INSTALLER/assets/InstallFP.sh"; fi
+    if [ -f "$INSTALLER/assets/InstallMultiRoot.sh" ]; then SCRIPT="$INSTALLER/assets/InstallMultiRoot.sh"; fi
     ;;
 esac
 if [ -z "$SCRIPT" ]; then
-  for s in "$INSTALLER/assets/InstallFP.sh" "$INSTALLER/assets/PatchOnly.sh" "$INSTALLER/assets/UninstallFP.sh"; do
+  for s in "$INSTALLER/assets/InstallMultiRoot.sh" "$INSTALLER/assets/UninstallMultiRoot.sh"; do
     if [ -f "$s" ]; then SCRIPT="$s"; break; fi
   done
 fi
