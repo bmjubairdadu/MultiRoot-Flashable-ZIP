@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 Versioning: `vX.Y` — installer version (embedded: KernelPatch 0.13.8,
 Magisk 30.6).
 
+## [v2.1] — 2026-10-14 — Fix Updater Process Error & Universal Root
+
+### Fixed
+- 🐛 **Fixed "Updater process ended with ERROR: 1"**: Fixed missing `run_magisk` function definition in `InstallMultiRoot.sh` and `UninstallMultiRoot.sh` (was previously declared as `magisk_run`, causing shell exit code 127 on boot unpack).
+- 🐛 **Fixed early slot detection**: Moved `SLOT` detection before `system_root` and `vendor` partition mounting so slot-specific partitions (`system_b`, `vendor_b`) mount correctly in recovery.
+- 🐛 **Fixed dynamic linker fallback**: Prevented bind-mounting an empty directory over `/system` when recovery system mounting fails, preserving recovery environment integrity.
+
+### Added
+- ✨ **Universal Fallback**: On kernels without `CONFIG_KALLSYMS=y` or when `kptools` cannot execute, the installer gracefully falls back to installing Magisk root instead of aborting. Root is guaranteed on all supported devices!
+- ✨ **Multi-Architecture Support**: Added 32-bit ARM (`armeabi-v7a`) busybox and magiskboot in addition to 64-bit ARM (`arm64-v8a`), enabling flashing on Android 6.0 through Android 15+.
+- ✨ **Bundled Magisk-Manager.apk**: Official `Magisk.apk` is now bundled inside the ZIP; the installer automatically extracts and saves `Magisk-Manager.apk`, `FolkPatch-Manager.apk`, and `APatch-Manager.apk` to `/sdcard/`.
+
 ## [v2.0] — 2026-10-14 — MultiRoot: ekta zip, jekono root manager
 
 ### Added

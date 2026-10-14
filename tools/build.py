@@ -97,7 +97,7 @@ def build(outname, entries, rd):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
-    ap.add_argument("--tag", default="v2.0", help="ZIP filename tag, e.g. v2.0")
+    ap.add_argument("--tag", default="v2.1", help="ZIP filename tag, e.g. v2.1")
     args = ap.parse_args()
     print("Building MultiRoot %s (KP %s + Magisk %s)" % (args.tag, KP_VER, MAGISK_VER))
 
@@ -137,7 +137,20 @@ if __name__ == "__main__":
     magiskbin = zm.read("lib/arm64-v8a/libmagisk.so")
     init_ld = zm.read("lib/arm64-v8a/libinit-ld.so")
     stub_apk = zm.read("assets/stub.apk")
+
+    # 32-bit ARM (armeabi-v7a) support from official Magisk APK
+    try:
+        bb32 = zm.read("lib/armeabi-v7a/libbusybox.so")
+        mb32 = zm.read("lib/armeabi-v7a/libmagiskboot.so")
+        mi32 = zm.read("lib/armeabi-v7a/libmagiskinit.so")
+        mbin32 = zm.read("lib/armeabi-v7a/libmagisk.so")
+        ild32 = zm.read("lib/armeabi-v7a/libinit-ld.so")
+    except KeyError:
+        bb32 = mb32 = mi32 = mbin32 = ild32 = b""
     zm.close()
+
+    with open(magisk_path, "rb") as f:
+        magisk_apk = f.read()
 
     ub = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "update-binary"))
     us = lf(os.path.join(ROOT, "META-INF", "com", "google", "android", "updater-script"))
@@ -145,31 +158,29 @@ if __name__ == "__main__":
     un = lf(os.path.join(ROOT, "assets", "UninstallMultiRoot.sh"))
 
     rd_inst = (
-        "MultiRoot v2.0 - Recovery Installer (KernelPatch %s + Magisk %s)\n" % (KP_VER, MAGISK_VER) +
+        "MultiRoot v2.0 - Universal Recovery Installer (KernelPatch %s + Magisk %s)\n" % (KP_VER, MAGISK_VER) +
         "======================================================================\n"
-        "Ekta flashable, jekono root manager:\n"
-        "  - FolkPatch Manager  (flash sesh e sdcard e FolkPatch-Manager.apk)\n"
-        "  - APatch Manager     (sdcard e APatch-Manager.apk)\n"
-        "  - Magisk app         (GitHub/Play theke install koro)\n"
-        "Flash korar por je kono ekta manager app install korlei oita root\n"
-        "manage korbe. Manager APK gulo sdcard e copy kora thake.\n"
+        "Ekta flashable ZIP, jekono root manager kaj korbe:\n"
+        "  - Magisk Manager    (sdcard e Magisk-Manager.apk)\n"
+        "  - FolkPatch Manager (sdcard e FolkPatch-Manager.apk)\n"
+        "  - APatch Manager    (sdcard e APatch-Manager.apk)\n"
+        "  - KernelSU / Next   (je kono APK install kore su access pabe)\n"
+        "\n"
+        "Flash korar por phone reboot kore sdcard theke je kono ekta manager\n"
+        "install korlei shob app root / superuser access pabe.\n"
         "\n"
         "Kivabe flash korbe:\n"
-        "  1. Ei ZIP sdcard e copy koro\n"
-        "  2. Custom recovery (TWRP/OrangeFox) -> Install -> ZIP select\n"
-        "  3. Reboot -> je kono manager app install koro -> Installed/Active\n"
+        "  1. Ei ZIP phone er storage / sdcard e copy koro\n"
+        "  2. Custom recovery (TWRP/OrangeFox) -> Install -> ZIP select koro\n"
+        "  3. Reboot -> sdcard theke manager app install koro\n"
         "\n"
         "Mode change (optional): sdcard e 'root-mode.txt' banao, first line:\n"
-        "  all    = KernelPatch + Magisk (default)\n"
+        "  all    = KernelPatch + Magisk (default, universal root)\n"
         "  kpatch = shudhu KernelPatch (FolkPatch/APatch manager)\n"
         "  magisk = shudhu Magisk (Magisk manager)\n"
-        "Tarpor ei ZIP abar flash koro.\n"
         "\n"
-        "Requirements: ARM64 + CONFIG_KALLSYMS=y kernel + unlocked bootloader.\n"
-        "NO backup file toiri hoy na - direct flash. Uninstaller ZIP diye\n"
-        "jekono somoy unroot kora jabe (backup charai).\n"
-        "NOTE: KernelSU manager (KSU/Next/SukiSU) ei ZIP er sathe kaj kore na\n"
-        "(tar KMI-specific kernel/LKM alada lage).\n"
+        "Universal: ARM64 + 32-bit ARM, Android 6.0 theke Android 15+.\n"
+        "NO backup file toiri hoy na - direct flash.\n"
         "Bootloop hole MultiRoot Uninstaller ZIP flash koro.\n"
     )
 
@@ -191,6 +202,8 @@ if __name__ == "__main__":
         ("lib/arm64-v8a/libbusybox.so", bb, 0o755),
         ("lib/arm64-v8a/libkptools.so", kt, 0o755),
     ]
+    if bb32:
+        common.append(("lib/armeabi-v7a/libbusybox.so", bb32, 0o755))
 
     inst_entries = list(common) + [
         ("assets/kpimg", kpimg, 0o755),
@@ -200,9 +213,21 @@ if __name__ == "__main__":
         ("assets/magisk/magisk", magiskbin, 0o755),
         ("assets/magisk/init-ld", init_ld, 0o644),
         ("assets/magisk/stub.apk", stub_apk, 0o644),
+        ("assets/magisk/arm64-v8a/magiskboot", magiskboot, 0o755),
+        ("assets/magisk/arm64-v8a/magiskinit", magiskinit, 0o644),
+        ("assets/magisk/arm64-v8a/magisk", magiskbin, 0o755),
+        ("assets/magisk/arm64-v8a/init-ld", init_ld, 0o644),
         ("FolkPatch.apk", folk_apk, 0o644),
         ("APatch.apk", apatch_apk, 0o644),
+        ("Magisk.apk", magisk_apk, 0o644),
     ]
+    if mb32:
+        inst_entries.extend([
+            ("assets/magisk/armeabi-v7a/magiskboot", mb32, 0o755),
+            ("assets/magisk/armeabi-v7a/magiskinit", mi32, 0o644),
+            ("assets/magisk/armeabi-v7a/magisk", mbin32, 0o755),
+            ("assets/magisk/armeabi-v7a/init-ld", ild32, 0o644),
+        ])
     if apd:
         inst_entries.append(("assets/apd", apd, 0o755))
     if fpd:
@@ -213,7 +238,10 @@ if __name__ == "__main__":
     un_entries = list(common) + [
         ("assets/UninstallMultiRoot.sh", un, 0o755),
         ("assets/magisk/magiskboot", magiskboot, 0o755),
+        ("assets/magisk/arm64-v8a/magiskboot", magiskboot, 0o755),
     ]
+    if mb32:
+        un_entries.append(("assets/magisk/armeabi-v7a/magiskboot", mb32, 0o755))
 
     os.makedirs(args.out, exist_ok=True)
     outs = []

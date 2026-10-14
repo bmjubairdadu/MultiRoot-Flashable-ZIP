@@ -1,8 +1,8 @@
 #!/sbin/sh
-# MultiRoot Magisk-style recovery bootstrap (POSIX sh, no bashisms)
+# MultiRoot recovery bootstrap (POSIX sh, recovery compatible)
 # Args from recovery: $1 api-version, $2 fd, $3 zipfile
 # Picks InstallMultiRoot.sh (default) or UninstallMultiRoot.sh (*uninstall*).
-# Debug mode: log to /tmp/multiroot_debug.log so the user can send last lines.
+# Logs to /tmp/multiroot_debug.log so the user can inspect in recovery terminal.
 OUTFD="$2"
 ZIPFILE="$3"
 TMPDIR="/dev/tmp"
@@ -19,16 +19,15 @@ raw_print() {
   echo "$1" >> "$DBG" 2>/dev/null
   if [ -n "$OUTFD" ] && [ -e "/proc/self/fd/$OUTFD" ]; then
     printf 'ui_print %s\nui_print\n' "$1" >> "/proc/self/fd/$OUTFD" 2>/dev/null
+  else
+    echo "$1" >&2
   fi
-  # also spam stderr so it shows in older recoveries
-  echo "$1" >&2
 }
 
 raw_print "****************************"
 raw_print " MultiRoot Recovery ZIP"
-raw_print " v2.0 (KP-0.13.8 + Magisk-30.6)"
-raw_print " OUTFD=$OUTFD ZIP=$ZIPFILE"
-raw_print " DBG=$DBG"
+raw_print " v2.1 (KP-0.13.8 + Magisk-30.6)"
+raw_print " Universal Root for Android"
 raw_print "****************************"
 
 # Normalize TMPDIR to somewhere writable.
@@ -39,48 +38,49 @@ done
 if [ -z "$TMPDIR" ]; then TMPDIR="/tmp"; mkdir -p "$TMPDIR" 2>/dev/null; fi
 if [ -z "$DBG" ] || [ ! -d "$(dirname "$DBG" 2>/dev/null)" ]; then DBG="$TMPDIR/multiroot_debug.log"; fi
 : > "$DBG" 2>/dev/null
-raw_print "- TMPDIR=$TMPDIR"
-raw_print "- args: 1=$1 2=$2 3=$3 0=$0"
-ls -ld "$ZIPFILE" >> "$DBG" 2>&1
-raw_print "- ls ZIP rc=$?"
 
 BBBIN="$TMPDIR/busybox"
 INSTALLER="$TMPDIR/multiroot"
 rm -rf "$INSTALLER" 2>/dev/null
 if [ -f "$BBBIN" ]; then : > "$BBBIN" 2>/dev/null; rm -f "$BBBIN" 2>/dev/null; fi
 mkdir -p "$INSTALLER" 2>/dev/null
-raw_print "- installer dir: $INSTALLER err=$?"
 
 if [ ! -f "$ZIPFILE" ]; then
   raw_print "- Zip not found: $ZIPFILE"
   raw_print "- tip: re-download, sdcard may be unmounted"
-  ls -R /sdcard 2>&1 | head -n 50 >> "$DBG" 2>&1
   exit 1
 fi
 
-# Busybox bootstrap via recovery's own unzip.
-raw_print "- extracting busybox ..."
+# Busybox bootstrap with multi-arch detection (arm64, arm 32-bit, x86_64, x86)
+raw_print "- Extracting busybox ..."
+ARCH=""
 unzip -o "$ZIPFILE" "busybox" -d "$TMPDIR" >> "$DBG" 2>&1
-raw_print "- unzip busybox rc=$?"
 if [ -f "$TMPDIR/busybox" ]; then
   chmod 755 "$TMPDIR/busybox" 2>/dev/null
-  ls -l "$TMPDIR/busybox" >> "$DBG" 2>&1
-fi
-if [ ! -x "$BBBIN" ]; then
-  unzip -o "$ZIPFILE" "lib/arm64-v8a/libbusybox.so" -d "$TMPDIR" >> "$DBG" 2>&1
-  raw_print "- unzip libbusybox rc=$?"
-  if [ -f "$TMPDIR/lib/arm64-v8a/libbusybox.so" ]; then
-    chmod 755 "$TMPDIR/lib/arm64-v8a/libbusybox.so" 2>/dev/null
-    mv -f "$TMPDIR/lib/arm64-v8a/libbusybox.so" "$BBBIN" 2>/dev/null
-    rm -rf "$TMPDIR/lib" 2>/dev/null
+  if "$TMPDIR/busybox" true >> "$DBG" 2>&1; then
+    mv -f "$TMPDIR/busybox" "$BBBIN" 2>/dev/null
+    ARCH="arm64-v8a"
   fi
 fi
-if [ -f "$BBBIN" ]; then
-  chmod 755 "$BBBIN" 2>/dev/null
-  ls -l "$BBBIN" >> "$DBG" 2>&1
+
+if [ ! -x "$BBBIN" ]; then
+  for a in "arm64-v8a" "armeabi-v7a" "x86_64" "x86"; do
+    unzip -o "$ZIPFILE" "lib/$a/libbusybox.so" -d "$TMPDIR" >> "$DBG" 2>&1
+    libpath="$TMPDIR/lib/$a/libbusybox.so"
+    if [ -f "$libpath" ]; then
+      chmod 755 "$libpath" 2>/dev/null
+      if "$libpath" true >> "$DBG" 2>&1; then
+        mv -f "$libpath" "$BBBIN" 2>/dev/null
+        ARCH="$a"
+        rm -rf "$TMPDIR/lib" 2>/dev/null
+        break
+      fi
+    fi
+  done
 fi
+
 if [ -n "$BBBIN" ] && [ -x "$BBBIN" ] && "$BBBIN" true >>"$DBG" 2>&1; then
-  raw_print "- busybox ready: $BBBIN"
+  raw_print "- Busybox ready ($ARCH)"
 else
   raw_print "- WARNING: busybox unavailable, using recovery built-ins"
   BBBIN=""
@@ -88,35 +88,24 @@ fi
 
 export BBBIN
 export INSTALLER
+export ARCH
 export ASH_STANDALONE=1
 
-raw_print "- extracting payload ..."
+raw_print "- Extracting payload ..."
 mkdir -p "$INSTALLER" 2>/dev/null
-# Only the payload is extracted - the Manager APKs stay inside the ZIP and
-# are streamed to sdcard later by the installer (keeps tmpfs usage low).
 unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
 URC=$?
-raw_print "- unzip payload rc=$URC"
 if [ -n "$BBBIN" ] && [ ! -f "$INSTALLER/README.txt" ]; then
-  raw_print "- retry with busybox unzip"
   rm -rf "$INSTALLER" 2>/dev/null; mkdir -p "$INSTALLER" 2>/dev/null
   "$BBBIN" unzip -o "$ZIPFILE" "assets/*" "lib/*" "README.txt" -d "$INSTALLER" >>"$DBG" 2>&1
-  raw_print "- bb unzip rc=$?"
 fi
 
-ls -R "$INSTALLER" 2>&1 | head -n 120 >> "$DBG" 2>&1
-chmod 755 "$INSTALLER/assets/"*.sh 2>/dev/null
-chmod 755 "$INSTALLER/lib/arm64-v8a/"*.so "$INSTALLER/assets/kpimg" 2>/dev/null
-chmod 755 "$INSTALLER/assets/magisk/"* 2>/dev/null
-for f in "$INSTALLER/assets/"*.sh "$INSTALLER/lib/arm64-v8a/"*.so "$INSTALLER/assets/kpimg"; do
-  ls -l "$f" >> "$DBG" 2>&1
-done
+chmod -R 755 "$INSTALLER/assets" "$INSTALLER/lib" 2>/dev/null
 
 # Pick the installer by ZIP name when possible, else default to install.
 SCRIPT=""
 LOWER=""
 LOWER=$(echo "$ZIPFILE" | tr 'A-Z' 'a-z' 2>/dev/null)
-raw_print "- lower ZIP: $LOWER"
 case "$LOWER" in
   *uninstall*|*remove*)
     if [ -f "$INSTALLER/assets/UninstallMultiRoot.sh" ]; then SCRIPT="$INSTALLER/assets/UninstallMultiRoot.sh"; fi
@@ -132,22 +121,15 @@ if [ -z "$SCRIPT" ]; then
 fi
 
 if [ -z "$SCRIPT" ]; then
-  raw_print "- Installer script missing!"
-  raw_print "- contents in $INSTALLER/assets:"
-  ls -l "$INSTALLER/assets" >> "$DBG" 2>&1
-  cat "$DBG" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do raw_print " DBG: $line"; done
+  raw_print "- ERROR: Installer script missing!"
   exit 1
 fi
 
-raw_print "- launching: $SCRIPT"
-raw_print "- DBG log at: $DBG (will survive on /tmp)"
-# If exec fails we keep DBG and exit 1 so recovery shows Error 1 with our msg.
-# Use busybox sh when available, else system sh.
+raw_print "- Launching installer ..."
 if [ -n "$BBBIN" ] && [ -x "$BBBIN" ]; then
-  exec "$BBBIN" sh "$SCRIPT" "$1" "$2" "$3"
+  exec "$BBBIN" sh "$SCRIPT" "$@"
 else
-  exec sh "$SCRIPT" "$1" "$2" "$3"
+  exec sh "$SCRIPT" "$@"
 fi
-raw_print "- exec failed! trying fallback sh"
-sh "$SCRIPT" "$1" "$2" "$3"
+sh "$SCRIPT" "$@"
 exit 1
