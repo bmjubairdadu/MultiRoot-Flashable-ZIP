@@ -45,11 +45,19 @@ rm -rf "$INSTALLER" 2>/dev/null
 if [ -f "$BBBIN" ]; then : > "$BBBIN" 2>/dev/null; rm -f "$BBBIN" 2>/dev/null; fi
 mkdir -p "$INSTALLER" 2>/dev/null
 
+# Normalize ZIPFILE argument; some recoveries or sideload flows pass arguments differently
+if [ -z "$ZIPFILE" ] || [ ! -f "$ZIPFILE" ]; then
+  for cand in "$3" "$2" "$1" /sideload/package.zip /tmp/update.zip /sdcard/update.zip /dev/tmp/package.zip; do
+    if [ -n "$cand" ] && [ -f "$cand" ]; then ZIPFILE="$cand"; break; fi
+  done
+fi
+
 if [ ! -f "$ZIPFILE" ]; then
   raw_print "- Zip not found: $ZIPFILE"
   raw_print "- tip: re-download, sdcard may be unmounted"
   exit 1
 fi
+
 
 # Busybox bootstrap with multi-arch detection (arm64, arm 32-bit, x86_64, x86)
 raw_print "- Extracting busybox ..."
@@ -136,9 +144,14 @@ if [ ! -f "$INSTALLER/assets/InstallMultiRoot.sh" ] && [ ! -f "$INSTALLER/assets
   _nested=$(find "$INSTALLER" -type f \( -name "InstallMultiRoot.sh" -o -name "UninstallMultiRoot.sh" \) 2>/dev/null | head -n 1)
   if [ -n "$_nested" ] && [ -f "$_nested" ]; then
     _nested_assets=$(dirname "$_nested")
+    _nested_root=$(dirname "$_nested_assets")
     if [ "$_nested_assets" != "$INSTALLER/assets" ]; then
       mkdir -p "$INSTALLER/assets" 2>/dev/null
       cp -rf "$_nested_assets"/* "$INSTALLER/assets/" 2>/dev/null
+    fi
+    if [ -d "$_nested_root/lib" ] && [ "$_nested_root/lib" != "$INSTALLER/lib" ]; then
+      mkdir -p "$INSTALLER/lib" 2>/dev/null
+      cp -rf "$_nested_root/lib"/* "$INSTALLER/lib/" 2>/dev/null
     fi
   fi
 fi
